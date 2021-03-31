@@ -1,0 +1,3 @@
+[submodule "src/Transformer-TTS"]
+	path = src/Transformer-TTS
+	url = https://github.com/billyang98/Transformer-TTS.git
