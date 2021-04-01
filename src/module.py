@@ -3,6 +3,7 @@ Contains the nn.Modules which compose the networks. This includes modules
 for preprocessing speech and text, the transformer & RNN encoder/decoder, & post
 processing modules for text and speech.
 '''
+# TODO: Consider adding pre/post net base class.
 
 class SpeechPrenet(nn.Module):
     # TODO: Fill in from TTS repo :) 
@@ -23,6 +24,8 @@ class TextPostnet(nn.Module):
     # TODO: Fill in from TTS repo :) 
     def __init__(self):
         super(TextPostnet, self).__init__()
+
+# TODO: Consider adding Encoder/Decoder base class here
 
 class TransformerEncoder(nn.Module):
     # TODO: Fill in from TTS repo :) 
