@@ -5,3 +5,4 @@ scipy==1.5.2
 tensorboard==1.14.0
 tqdm==4.59.0
 torch==1.8.1+cpu torchvision==0.9.1+cpu torchaudio===0.8.1 -f https://download.pytorch.org/whl/torch_stable.html
+eng_to_ipa
