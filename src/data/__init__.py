@@ -1,11 +1,10 @@
 #-*- coding: utf-8 -*-
 
 import re
-from text import cleaners
-from text.symbols import symbols
-
-
-
+from data import cleaners
+from data.symbols import symbols
+import eng_to_ipa as ipa
+from typing import List
 
 # Mappings from symbol to numeric ID and vice versa:
 _symbol_to_id = {s: i for i, s in enumerate(symbols)}
@@ -13,6 +12,21 @@ _id_to_symbol = {i: s for i, s in enumerate(symbols)}
 
 # Regular expression matching text enclosed in curly braces:
 _curly_re = re.compile(r'(.*?)\{(.+?)\}(.*)')
+
+def raw_text_to_phoneme_ids(text: str) -> List[int]:
+  """
+  Converts a string into a list of phoneme ids eg.
+  "Hello World" -> [3,54,62,13,65,76]
+
+  Params:
+  text - a string input
+  Returns:
+  a list containing phonemes ids as ints
+  """
+  clean_text = _clean_text(text, ['english_cleaners'])
+  phonemes = ipa.convert(clean_text)
+  sequence = _symbols_to_sequence(phonemes)
+  return sequence
 
 
 def text_to_sequence(text, cleaner_names):
