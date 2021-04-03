@@ -36,6 +36,7 @@ def train():
         4. Return trained text & speech for validation, metric measurement
 
         TODO: Include functionality for saving, loading from save
+        TODO: Decide how to set hyperparameters
     '''
     # Get dataset
     num_epoch = 10
