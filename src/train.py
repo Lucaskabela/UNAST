@@ -5,6 +5,20 @@ Contains the code for training the encoder/decoders, including:
     - Denoising loss
     - Discriminator loss
 '''
+def autoencoder_loss():
+    raise Exception("Not implemented yet!")
+
+def supervised_loss():
+    raise Exception("Not implemented yet!")
+
+def crossmodel_loss():
+    raise Exception("Not implemented yet!")
+
+def discriminator_loss():
+    raise Exception("Not implemented yet!")
+
+def evaluate():
+    raise Exception("Not implemented yet!")
 
 def train():
     '''
@@ -23,4 +37,18 @@ def train():
 
         TODO: Include functionality for saving, loading from save
     '''
-    raise Exception("TODO: Implement")
+    # Get dataset
+    num_epoch = 10
+    train_dataset, valid_dataset = None
+
+    # init models and optimizers
+    model = None
+    optimizer = None
+
+    for epoch in range(num_epoch):
+        for batch in dataset:
+            # choose loss function here!
+            model.decode(model.encode(batch))
+        evaluate(model, valid_dataset)
+
+    return model
