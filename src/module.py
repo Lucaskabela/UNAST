@@ -55,7 +55,7 @@ class RNNEncoder(nn.Module):
         return self.hid2out(output)
 
 class RNNDecoder(nn.Module):
-    def __init__(self, encoder_out_size, d_in, hidden, d_out, dropout=.2, num_layers=1, bidirectional=False, attention=False):
+    def __init__(self, encoder_out_size, d_in, hidden, d_out, dropout=.2, num_layers=1, attention=False):
         super(RNNDecoder, self).__init__()
         self.attention = attention
         if self.attention:
@@ -64,7 +64,7 @@ class RNNDecoder(nn.Module):
         else:
             self.input_size = d_in
         self.rnn = nn.LSTM(self.input_size, hidden, num_layers=num_layers, 
-            bidirectional=bidirectional, batch_first=True, dropout=dropout)
+            batch_first=True, dropout=dropout)
         
         # Luong attention
         if self.attention:
