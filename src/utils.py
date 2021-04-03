@@ -2,6 +2,10 @@
 Contains any and all code we didnt want to put somewhere else
 '''
 import argparse
+import torch
+import numpy as np 
+import random
+
 def parse_args():
     parser = argparse.ArgumentParser(from_file_prefix_chars="@")
 
@@ -11,3 +15,17 @@ def parse_args():
     parser.add_argument('--batch_size', type=int, default=128, help='batch size')
     
     return parser.parse_args('@hyperparams.txt')
+
+
+def set_seed(seed):
+    '''
+    Sets torch, numpy, and random library with seed for reproducibility
+    See: https://pytorch.org/docs/stable/notes/randomness.html for more details
+    on setting determinism
+
+    Args:
+        - seed: An integer seed for consistency in different runs
+    ''' 
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)

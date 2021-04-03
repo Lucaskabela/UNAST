@@ -5,6 +5,8 @@ Contains the code for training the encoder/decoders, including:
     - Denoising loss
     - Discriminator loss
 '''
+from utils import parse_args, set_seed
+
 def autoencoder_loss():
     raise Exception("Not implemented yet!")
 
@@ -36,17 +38,17 @@ def train():
         4. Return trained text & speech for validation, metric measurement
 
         TODO: Include functionality for saving, loading from save
-        TODO: Decide how to set hyperparameters
     '''
+    args = parse_args()
+    set_seed(args.seed)
     # Get dataset
-    num_epoch = 10
     train_dataset, valid_dataset = None
 
     # init models and optimizers
     model = None
     optimizer = None
 
-    for epoch in range(num_epoch):
+    for epoch in range(args.epochs):
         for batch in dataset:
             # choose loss function here!
             model.decode(model.encode(batch))
