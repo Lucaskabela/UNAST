@@ -1,10 +1,10 @@
-import hyperparams as hp
+import hyperparameters as hp
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import os
 import librosa
 import numpy as np
-from text import text_to_sequence
+from data import raw_text_to_phoneme_ids
 import collections
 from scipy import signal
 import torch as t
@@ -32,9 +32,9 @@ class LJDatasets(Dataset):
 
     def __getitem__(self, idx):
         wav_name = os.path.join(self.root_dir, self.landmarks_frame.ix[idx, 0]) + '.wav'
-        text = self.landmarks_frame.ix[idx, 1]
+        original_text = self.landmarks_frame.ix[idx, 1]
 
-        text = np.asarray(text_to_sequence(text, [hp.cleaners]), dtype=np.int32)
+        text = np.asarray(raw_text_to_phoneme_ids(original_text), dtype=np.int32)
         mel = np.load(wav_name[:-4] + '.pt.npy')
         mel_input = np.concatenate([np.zeros([1,hp.num_mels], np.float32), mel[:-1,:]], axis=0)
         text_length = len(text)
@@ -44,7 +44,7 @@ class LJDatasets(Dataset):
         sample = {'text': text, 'mel': mel, 'text_length':text_length, 'mel_input':mel_input, 'pos_mel':pos_mel, 'pos_text':pos_text}
 
         return sample
-    
+
 class PostDatasets(Dataset):
     """LJSpeech dataset."""
 
@@ -68,7 +68,7 @@ class PostDatasets(Dataset):
         sample = {'mel':mel, 'mag':mag}
 
         return sample
-    
+
 def collate_fn_transformer(batch):
 
     # Puts each data field into a tensor with outer dimension batch size
@@ -80,7 +80,7 @@ def collate_fn_transformer(batch):
         text_length = [d['text_length'] for d in batch]
         pos_mel = [d['pos_mel'] for d in batch]
         pos_text= [d['pos_text'] for d in batch]
-        
+
         text = [i for i,_ in sorted(zip(text, text_length), key=lambda x: x[1], reverse=True)]
         mel = [i for i, _ in sorted(zip(mel, text_length), key=lambda x: x[1], reverse=True)]
         mel_input = [i for i, _ in sorted(zip(mel_input, text_length), key=lambda x: x[1], reverse=True)]
@@ -99,7 +99,7 @@ def collate_fn_transformer(batch):
 
     raise TypeError(("batch must contain tensors, numbers, dicts or lists; found {}"
                      .format(type(batch[0]))))
-    
+
 def collate_fn_postnet(batch):
 
     # Puts each data field into a tensor with outer dimension batch size
@@ -107,7 +107,7 @@ def collate_fn_postnet(batch):
 
         mel = [d['mel'] for d in batch]
         mag = [d['mag'] for d in batch]
-        
+
         # PAD sequences with largest length of the batch
         mel = _pad_mel(mel)
         mag = _pad_mel(mag)

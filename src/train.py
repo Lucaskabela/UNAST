@@ -6,6 +6,10 @@ Contains the code for training the encoder/decoders, including:
     - Discriminator loss
 '''
 
+from preprocess import get_dataset, DataLoader, collate_fn_transformer
+from tqdm import tqdm
+import hyperparameters as hp
+
 def train():
     '''
     TODO:
@@ -23,4 +27,15 @@ def train():
 
         TODO: Include functionality for saving, loading from save
     '''
+    dataset = get_dataset()
+
+    for epoch in range(hp.epochs):
+        dataloader = DataLoader(dataset, batch_size=hp.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+
+        pbar = tqdm(dataloader)
+        for i, data in enumerate(pbar):
+            pbar.set_description("Processing at epoch %d"%epoch)
+
+            character, mel, mel_input, pos_text, pos_mel, _ = data
+
     raise Exception("TODO: Implement")
