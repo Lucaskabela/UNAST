@@ -49,36 +49,73 @@ class RNNEncoder(nn.Module):
         # TODO: expirement with something else than LSTM
         self.rnn = nn.LSTM(d_in, hidden, num_layers=num_layers, 
             bidirectional=bidirectional, batch_first=True, dropout=dropout)
-        self.hid2out = nn.Linear(self.num_dir * hidden, d_out )
+        
+        # Consider using this?
+        self.hid2out = nn.Linear(self.num_dir * hidden, d_out)
     
     def forward(self, sequence):
         output, (h, c) = self.rnn(sequence)
-        return output, (self.hid2out(h), self.hid2out(c))
+        return output, (h, c)
 
 class RNNDecoder(nn.Module):
-    def __init__(self, encoder_out_size, d_in, hidden, d_out, dropout=.2, num_layers=1, attention=False):
+    def __init__(self, enc_out_size, d_in, hidden, d_out, dropout=.2, num_layers=1, attention=False):
         super(RNNDecoder, self).__init__()
+
         self.attention = attention
         if self.attention:
-            # since encoder output size should be d_in
-            self.input_size = encoder_out_size + d_in
+            self.input_size = enc_out_size + d_in
         else:
             self.input_size = d_in
+
         self.rnn = nn.LSTM(self.input_size, hidden, num_layers=num_layers, 
             batch_first=True, dropout=dropout)
         
-        # Luong attention
+        # Luong attention TODO: ADD DROPOUT!?
         if self.attention:
-            self.attention_layer = nn.Linear(hidden, encoder_out_size)
-            self.out_layer = nn.Linear(hidden + encoder_out_size, d_out)
-            self.attn_softmax = nn.Softmax(dim=1)
-        else:
-            self.out_layer = nn.Linear(hidden, d_out)
-    
-    def forward(self, embed_decode, latent_state, enc_output, enc_ctxt_mask):
+            self.attention_layer = LuongGeneralAttention(hidden_size, enc_out_size)
+
+        self.out_layer = nn.Linear(hidden, d_out)
+
+    def forward(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
         # TODO: Check shape here?
-        output, hidden = self.rnn(embed_decode, latent_state)
         if self.attention:
-            # TODO: attention computation! 
-            pass
+            attn_W = self.attention_layer(hidden_state[0], enc_output, enc_ctxt_mask)
+            decode_input = torch.cat((embed_decode, attn_W), dim=-1)
+        else:
+            decode_input = embed_decode
+
+        output, hidden = self.rnn(decode_input, hidden_state)
+        
         return self.out_layer(output), hidden
+
+class LuongGeneralAttention(nn.Module):
+    def __init__(self, hidden_size, enc_out_size):
+        self.hidden_size = hidden_size
+        self.enc_out_size = enc_out_size
+        self.fc1 = nn.Linear(hidden_size + enc_out_size, hidden_size, bias=False)
+        self.fc2 = nn.Linear(hidden_size, 1, bias=False)
+
+    def forward(hidden, enc_output, enc_ctxt_mask):
+        '''
+        Returns the alignment weights
+        '''
+        src_len = enc_output.shape[0]
+        hidden = hidden.repeat(src_len, 1, 1)
+        e_o = enc_output.permute(1, 0, 2)
+        combined = torch.cat((hidden, e_o), dim=-1)
+
+        # combined is [seq_len x batch_size x hidden + enc_out]
+        align_scores = self.fc2(torch.tanh(self.fc1(combined))).squeeze(-1)
+        # align_scores is [seq_len x batch_size], so flip and mask all padding
+        align_scores = align_scores.permute(1, 0)
+        align_scores = align_scores.mask_fill(enc_ctxt_mask==1, -np.inf)
+
+        align_weights = F.softmax(align_scores, dim=-1).unsqueeze(1)
+        # align_weights is [batch_size x seq_len x 1] where each entry is score over sequence
+
+
+        # Note: If input is a (b×n×m) tensor, mat2 is a (b×m×p) tensor
+        #  --- out will be a (b×n×p) tensor.
+        # And we want a [batch_size x 1 x enc_out_size], so we have the right order
+        ctxt = torch.bmm(align_weights, enc_output)
+        return ctxt
