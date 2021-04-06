@@ -1,10 +1,10 @@
-import hyperparameters as hp
+import audio_parameters as ap
 import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import os
 import librosa
 import numpy as np
-from data import raw_text_to_phoneme_ids
+from data import raw_text_to_phoneme_ids, data_path
 import collections
 from scipy import signal
 import torch as t
@@ -25,7 +25,7 @@ class LJDatasets(Dataset):
         self.root_dir = root_dir
 
     def load_wav(self, filename):
-        return librosa.load(filename, sr=hp.sample_rate)
+        return librosa.load(filename, sr=ap.sr)
 
     def __len__(self):
         return len(self.landmarks_frame)
@@ -36,7 +36,7 @@ class LJDatasets(Dataset):
 
         text = np.asarray(raw_text_to_phoneme_ids(original_text), dtype=np.int32)
         mel = np.load(wav_name[:-4] + '.pt.npy')
-        mel_input = np.concatenate([np.zeros([1,hp.num_mels], np.float32), mel[:-1,:]], axis=0)
+        mel_input = np.concatenate([np.zeros([1,ap.num_mels], np.float32), mel[:-1,:]], axis=0)
         text_length = len(text)
         pos_text = np.arange(1, text_length + 1)
         pos_mel = np.arange(1, mel.shape[0] + 1)
@@ -127,7 +127,7 @@ def _prepare_data(inputs):
 
 def _pad_per_step(inputs):
     timesteps = inputs.shape[-1]
-    return np.pad(inputs, [[0,0],[0,0],[0, hp.outputs_per_step - (timesteps % hp.outputs_per_step)]], mode='constant', constant_values=0.0)
+    return np.pad(inputs, [[0,0],[0,0],[0, ap.outputs_per_step - (timesteps % ap.outputs_per_step)]], mode='constant', constant_values=0.0)
 
 def get_param_size(model):
     params = 0
@@ -139,10 +139,10 @@ def get_param_size(model):
     return params
 
 def get_dataset():
-    return LJDatasets(os.path.join(hp.data_path,'metadata.csv'), os.path.join(hp.data_path,'wavs'))
+    return LJDatasets(os.path.join(data_path,'metadata.csv'), os.path.join(data_path,'wavs'))
 
 def get_post_dataset():
-    return PostDatasets(os.path.join(hp.data_path,'metadata.csv'), os.path.join(hp.data_path,'wavs'))
+    return PostDatasets(os.path.join(data_path,'metadata.csv'), os.path.join(data_path,'wavs'))
 
 def _pad_mel(inputs):
     _pad = 0

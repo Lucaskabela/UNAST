@@ -6,6 +6,8 @@ from data.symbols import symbols
 import eng_to_ipa as ipa
 from typing import List
 
+data_path = './data/LJSpeech-1.1'
+
 # Mappings from symbol to numeric ID and vice versa:
 _symbol_to_id = {s: i for i, s in enumerate(symbols)}
 _id_to_symbol = {i: s for i, s in enumerate(symbols)}
