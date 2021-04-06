@@ -3,8 +3,9 @@ import pandas as pd
 from torch.utils.data import Dataset, DataLoader
 import os
 from utils import get_spectrograms
-import hyperparameters as hp
+import audio_parameters as ap
 import librosa
+from data import data_path
 
 class PrepareDataset(Dataset):
     """LJSpeech dataset."""
@@ -20,7 +21,7 @@ class PrepareDataset(Dataset):
         self.root_dir = root_dir
 
     def load_wav(self, filename):
-        return librosa.load(filename, sr=hp.sample_rate)
+        return librosa.load(filename, sr=ap.sr)
 
     def __len__(self):
         return len(self.landmarks_frame)
@@ -37,7 +38,7 @@ class PrepareDataset(Dataset):
         return sample
 
 if __name__ == '__main__':
-    dataset = PrepareDataset(os.path.join(hp.data_path,'metadata.csv'), os.path.join(hp.data_path,'wavs'))
+    dataset = PrepareDataset(os.path.join(data_path,'metadata.csv'), os.path.join(data_path,'wavs'))
     dataloader = DataLoader(dataset, batch_size=1, drop_last=False, num_workers=8)
     from tqdm import tqdm
     pbar = tqdm(dataloader)

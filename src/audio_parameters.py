@@ -14,23 +14,6 @@ n_mels = 80 # Number of Mel banks to generate
 power = 1.2 # Exponent for amplifying the predicted magnitude
 min_level_db = -100
 ref_level_db = 20
-hidden_size = 256
-embedding_size = 512
 max_db = 100
 ref_db = 20
-
-n_iter = 60
-# power = 1.5
 outputs_per_step = 1
-
-epochs = 10000
-lr = 0.001
-save_step = 2000
-image_step = 500
-batch_size = 32
-
-cleaners='english_cleaners'
-
-data_path = './data/LJSpeech-1.1'
-checkpoint_path = './checkpoint'
-sample_path = './samples'
