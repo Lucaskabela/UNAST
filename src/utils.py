@@ -1,21 +1,13 @@
 '''
 Contains any and all code we didnt want to put somewhere else
 '''
-import argparse
 import torch
 import numpy as np 
 import random
-
-def parse_args():
-    parser = argparse.ArgumentParser(from_file_prefix_chars="@")
-
-    parser.add_argument('--seed', type=int, default=0, help='RNG seed (default = 0)')
-    parser.add_argument('--epochs', type=int, default=100, help='num epochs to train for')
-    parser.add_argument('--lr', type=float, default=1e-3)
-    parser.add_argument('--batch_size', type=int, default=128, help='batch size')
-    
-    return parser.parse_args('@hyperparams.txt')
-
+import librosa
+import audio_parameters as ap
+import json
+import sys
 
 def set_seed(seed):
     '''
@@ -29,11 +21,6 @@ def set_seed(seed):
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
-import numpy as np
-import librosa
-import audio_parameters as ap
-import json
-import sys
 
 def parse_with_config(parser):
     """
