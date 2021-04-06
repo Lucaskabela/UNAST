@@ -4,6 +4,7 @@ for preprocessing speech and text, the transformer & RNN encoder/decoder, & post
 processing modules for text and speech.
 '''
 # TODO: Consider adding pre/post net base class.
+import torch.nn as nn
 
 class SpeechPrenet(nn.Module):
     # TODO: Fill in from TTS repo :) 
@@ -52,7 +53,7 @@ class RNNEncoder(nn.Module):
     
     def forward(self, sequence):
         output, (h, c) = self.rnn(sequence)
-        return self.hid2out(output)
+        return output, (self.hid2out(h), self.hid2out(c))
 
 class RNNDecoder(nn.Module):
     def __init__(self, encoder_out_size, d_in, hidden, d_out, dropout=.2, num_layers=1, attention=False):
@@ -74,10 +75,9 @@ class RNNDecoder(nn.Module):
         else:
             self.out_layer = nn.Linear(hidden, d_out)
     
-    def forward(self, latent_embed, state, enc_output, enc_ctxt_mask):
+    def forward(self, embed_decode, latent_state, enc_output, enc_ctxt_mask):
         # TODO: Check shape here?
-        rnn_in = latent_emb.unsqueeze(0)
-        output, hidden = self.rnn(rnn_in, state)
+        output, hidden = self.rnn(embed_decode, latent_state)
         if self.attention:
             # TODO: attention computation! 
             pass
