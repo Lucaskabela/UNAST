@@ -107,10 +107,19 @@ class TextNet(AutoEncoderNet):
 
 class Discriminator(nn.Module):
     # TODO: Fill in with linear layers :) 
-    def __init__(self):
+    def __init__(self, enc_dim, hidden, out_classes=2, dropout=.2):
         super(Discriminator, self).__init__()
+        self.fc1 = nn.Linear(enc_dim, hidden)
+        self.fc2 = nn.Linear(hidden, hidden)
+        self.fc3 = nn.Linear(hidden, out_classes)
+        self.dropout = nn.Dropout(p=dropout)
+        self.non_linear = nn.LeakyRelu(.2)
 
-
+    def forward(self, enc_output):
+        temp = self.dropout(self.non_linear(self.fc1(enc_output)))
+        temp2 = self.dropout(self.non_linear(self.fc2(temp)))
+        return self.fc3(temp2)
+    
 class SpeechTransformer(SpeechNet):
     # TODO: Fill in with pre/post needed and enc/dec
     def __init_(self):
