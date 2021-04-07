@@ -1,11 +1,26 @@
 '''
 Contains any and all code we didnt want to put somewhere else
 '''
-import numpy as np
+import torch
+import numpy as np 
+import random
 import librosa
 import audio_parameters as ap
 import json
 import sys
+
+def set_seed(seed):
+    '''
+    Sets torch, numpy, and random library with seed for reproducibility
+    See: https://pytorch.org/docs/stable/notes/randomness.html for more details
+    on setting determinism
+
+    Args:
+        - seed: An integer seed for consistency in different runs
+    ''' 
+    torch.manual_seed(seed)
+    random.seed(seed)
+    np.random.seed(seed)
 
 def parse_with_config(parser):
     """

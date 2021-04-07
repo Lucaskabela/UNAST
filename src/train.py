@@ -5,12 +5,44 @@ Contains the code for training the encoder/decoders, including:
     - Denoising loss
     - Discriminator loss
 '''
-
+from utils import set_seed, parse_with_config
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from tqdm import tqdm
 import audio_parameters as ap
-from utils import parse_with_config
 import argparse
+import torch.nn.functional as F
+
+
+# TODO: Refactor these losses...
+def autoencoder_loss(output, target, speech=False):
+    '''
+        Computes the NLL loss between output and target
+    '''
+    PAD_IDX = 0
+    if speech:
+        return F.mse_loss(output, target)
+    else:
+        return F.cross_entropy(output, target, ignore_index=PAD_IDX)
+
+def supervised_loss(output, target):
+    PAD_IDX = 0
+    if speech:
+        return F.mse_loss(output, target)
+    else:
+        return F.cross_entropy(output, target, ignore_index=PAD_IDX)
+
+def crossmodel_loss(output, target):
+    PAD_IDX = 0
+    if speech:
+        return F.mse_loss(output, target)
+    else:
+        return F.cross_entropy(output, target, ignore_index=PAD_IDX)
+
+def discriminator_loss(output, target):
+    return F.cross_entropy(output, target)
+
+def evaluate():
+    raise Exception("Not implemented yet!")
 
 def train(args):
     '''
@@ -29,7 +61,11 @@ def train(args):
 
         TODO: Include functionality for saving, loading from save
     '''
+    set_seed(args.seed)
     dataset = get_dataset()
+    # init models and optimizers
+    model = None
+    optimizer = None
 
     for epoch in range(args.epochs):
         dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
@@ -40,7 +76,13 @@ def train(args):
 
             character, mel, mel_input, pos_text, pos_mel, _ = data
 
-    raise Exception("TODO: Implement")
+        for batch in dataloader:
+            # choose loss function here!
+            model.decode(model.encode(batch))
+        evaluate(model, valid_dataset)
+
+    return model
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
