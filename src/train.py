@@ -10,18 +10,36 @@ from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from tqdm import tqdm
 import audio_parameters as ap
 import argparse
+import torch.nn.functional as F
 
-def autoencoder_loss():
-    raise Exception("Not implemented yet!")
 
-def supervised_loss():
-    raise Exception("Not implemented yet!")
+# TODO: Refactor these losses...
+def autoencoder_loss(output, target, speech=False):
+    '''
+        Computes the NLL loss between output and target
+    '''
+    PAD_IDX = 0
+    if speech:
+        return F.mse_loss(output, target)
+    else:
+        return F.cross_entropy(output, target, ignore_index=PAD_IDX)
 
-def crossmodel_loss():
-    raise Exception("Not implemented yet!")
+def supervised_loss(output, target):
+    PAD_IDX = 0
+    if speech:
+        return F.mse_loss(output, target)
+    else:
+        return F.cross_entropy(output, target, ignore_index=PAD_IDX)
 
-def discriminator_loss():
-    raise Exception("Not implemented yet!")
+def crossmodel_loss(output, target):
+    PAD_IDX = 0
+    if speech:
+        return F.mse_loss(output, target)
+    else:
+        return F.cross_entropy(output, target, ignore_index=PAD_IDX)
+
+def discriminator_loss(output, target):
+    return F.cross_entropy(output, target)
 
 def evaluate():
     raise Exception("Not implemented yet!")
