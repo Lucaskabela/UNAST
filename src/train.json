@@ -6,5 +6,9 @@
     "image_step": 500,
     "batch_size": 32,
     "checkpoint_path": "./checkpoint",
-    "sample_path": "./samples"
+    "sample_path": "./samples",
+    
+    "num_mels": 80,
+    "phoneme_embedding_size": 512,
+    "hidden_size": 256,
 }
