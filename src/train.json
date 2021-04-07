@@ -7,6 +7,7 @@
     "checkpoint_path": "./checkpoint",
     "sample_path": "./samples",
     
+    "num_mels": 80,
     "phoneme_embedding_size": 512,
     "hidden_size": 256,
 }

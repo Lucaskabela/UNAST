@@ -3,7 +3,11 @@ Contains the nn.Modules which compose the networks. This includes modules
 for preprocessing speech and text, the transformer & RNN encoder/decoder, & post
 processing modules for text and speech.
 '''
-# TODO: Consider adding pre/post net base class.
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+from collections import OrderedDict
 
 from data.symbols import symbols
 
@@ -64,9 +68,34 @@ class Conv(nn.Module):
         return x
 
 class SpeechPrenet(nn.Module):
-    # TODO: Fill in from TTS repo :) 
-    def __init__(self):
+    """
+    Prenet for Speech Encoder copied from Transformer-TTS.
+    
+    As described in Ren's paper, 2-layer dense-connected network
+    with hidden size of 256, and the output dimension equals to
+    the hidden size of Transformer. Note that the dropout is
+    removed here, which differs from what's in Transformer-TTS.
+    """
+    def __init__(self, input_size, hidden_size, output_size):
+        """
+        :param input_size: dimension of input
+        :param hidden_size: dimension of hidden unit
+        :param output_size: dimension of output
+        """
         super(SpeechPrenet, self).__init__()
+        self.input_size = input_size
+        self.output_size = output_size
+        self.hidden_size = hidden_size
+        self.layer = nn.Sequential(OrderedDict([
+             ('fc1', Linear(self.input_size, self.hidden_size)),
+             ('relu1', nn.ReLU()),
+             ('fc2', Linear(self.hidden_size, self.output_size)),
+             ('relu2', nn.ReLU()),
+        ]))
+
+    def forward(self, input_):
+        out = self.layer(input_)
+        return out
 
 class SpeechPostnet(nn.Module):
     # TODO: Fill in from TTS repo :) 
@@ -75,7 +104,7 @@ class SpeechPostnet(nn.Module):
 
 class TextPrenet(nn.Module):
     """
-    Pre-network for Text Encoder copied from Transformer-TTS.
+    Prenet for Text Encoder copied from Transformer-TTS.
     
     Essentially, maps phoneme IDs to an embedding space using
     convolutional networks. Should be the same as Ren's paper
@@ -124,7 +153,6 @@ class TextPrenet(nn.Module):
         input_ = self.dropout3(torch.relu(self.batch_norm3(self.conv3(input_)))) 
         input_ = input_.transpose(1, 2) 
         input_ = self.projection(input_) 
-
         return input_
 
 class TextPostnet(nn.Module):
