@@ -4,7 +4,10 @@ for preprocessing speech and text, the transformer & RNN encoder/decoder, & post
 processing modules for text and speech.
 '''
 # TODO: Consider adding pre/post net base class.
+import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
 
 class SpeechPrenet(nn.Module):
     # TODO: Fill in from TTS repo :) 
@@ -52,10 +55,33 @@ class RNNEncoder(nn.Module):
         
         # Consider using this?
         self.hid2out = nn.Linear(self.num_dir * hidden, d_out)
-    
+        
+        if self.num_dir == 2:
+            self.reduce_h_W = nn.Linear(hidden * 2, hidden, bias=True)
+            self.reduce_c_W = nn.Linear(hidden * 2, hidden, bias=True)
+
     def forward(self, sequence):
-        output, (h, c) = self.rnn(sequence)
-        return output, (h, c)
+        output, hn = self.rnn(sequence)
+
+        if self.num_dir == 2:
+            # Potential source of error here!!
+            h = hn[0].view(self.num_layers, self.num_dir, -1, self.hidden)
+            c = hn[1].view(self.num_layers, self.num_dir, -1, self.hidden)
+
+            # Cat the representations from forward and backward LSTMs
+            # NOTE: This indexing is robust to num_layers & bidirectional.  Pls no change
+            h_ = torch.cat((h[:, 0, :, :], h[:, 1, :, :]), dim=-1)
+            c_ = torch.cat((c[:, 0, :, :], c[:, 1, :, :]), dim=-1)
+
+            # Now reduce!
+            new_h = self.reduce_h_W(h_)
+            new_c = self.reduce_c_W(c_)
+            h_t = (new_h, new_c)
+        else:
+            h, c = hn[0][:], hn[1][:]
+            h_t = (h, c)
+
+        return self.hid2out(output), h_t
 
 class RNNDecoder(nn.Module):
     def __init__(self, enc_out_size, d_in, hidden, d_out, dropout=.2, num_layers=1, attention=False):
@@ -72,14 +98,16 @@ class RNNDecoder(nn.Module):
         
         # Luong attention TODO: ADD DROPOUT!?
         if self.attention:
-            self.attention_layer = LuongGeneralAttention(hidden_size, enc_out_size)
+            self.attention_layer = LuongGeneralAttention(hidden, enc_out_size)
 
         self.out_layer = nn.Linear(hidden, d_out)
 
     def forward(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
         # TODO: Check shape here?
         if self.attention:
-            attn_W = self.attention_layer(hidden_state[0], enc_output, enc_ctxt_mask)
+            # Handles num_layers > 1 by taking last layer
+            hidden_key = hidden_state[0][-1].unsqueeze(0) 
+            attn_W = self.attention_layer(hidden_key, enc_output, enc_ctxt_mask)
             decode_input = torch.cat((embed_decode, attn_W), dim=-1)
         else:
             decode_input = embed_decode
@@ -90,16 +118,17 @@ class RNNDecoder(nn.Module):
 
 class LuongGeneralAttention(nn.Module):
     def __init__(self, hidden_size, enc_out_size):
+        super(LuongGeneralAttention, self).__init__()
         self.hidden_size = hidden_size
         self.enc_out_size = enc_out_size
         self.fc1 = nn.Linear(hidden_size + enc_out_size, hidden_size, bias=False)
         self.fc2 = nn.Linear(hidden_size, 1, bias=False)
 
-    def forward(hidden, enc_output, enc_ctxt_mask):
+    def forward(self, hidden, enc_output, enc_ctxt_mask):
         '''
         Returns the alignment weights
         '''
-        src_len = enc_output.shape[0]
+        src_len = enc_output.shape[1]
         hidden = hidden.repeat(src_len, 1, 1)
         e_o = enc_output.permute(1, 0, 2)
         combined = torch.cat((hidden, e_o), dim=-1)
@@ -108,7 +137,7 @@ class LuongGeneralAttention(nn.Module):
         align_scores = self.fc2(torch.tanh(self.fc1(combined))).squeeze(-1)
         # align_scores is [seq_len x batch_size], so flip and mask all padding
         align_scores = align_scores.permute(1, 0)
-        align_scores = align_scores.mask_fill(enc_ctxt_mask==1, -np.inf)
+        align_scores = align_scores.masked_fill(enc_ctxt_mask==1, -np.inf)
 
         align_weights = F.softmax(align_scores, dim=-1).unsqueeze(1)
         # align_weights is [batch_size x seq_len x 1] where each entry is score over sequence
