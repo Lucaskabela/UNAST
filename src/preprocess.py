@@ -138,8 +138,8 @@ def get_param_size(model):
         params += tmp
     return params
 
-def get_dataset():
-    return LJDatasets(os.path.join(data_path,'metadata.csv'), os.path.join(data_path,'wavs'))
+def get_dataset(split_file):
+    return LJDatasets(os.path.join(data_path,split_file), os.path.join(data_path,'wavs'))
 
 def get_post_dataset():
     return PostDatasets(os.path.join(data_path,'metadata.csv'), os.path.join(data_path,'wavs'))
