@@ -65,6 +65,7 @@ def train(args):
     supervised_train_dataset = get_dataset('labeled_train.csv')
     unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
     val_dataset = get_dataset('val.csv')
+    full_train_dataset = get_dataset('full_train.csv')
     # init models and optimizers
     model = None
     optimizer = None
@@ -107,7 +108,16 @@ def train(args):
                 # with this unsupervised_batch
                 pass
 
-        # TODO: add the discriminator loop here
+        # Train discriminator
+        discriminator_dataloader = DataLoader(full_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+
+        bar = tqdm(discriminator_dataloader)
+        bar.set_description("Epoch {} Training Discriminator".format(epoch))
+        for batch in bar:
+            # TODO: Freeze model
+            # TODO: Train discriminator over the whole train dataset
+            pass
+
 
     return model
 
