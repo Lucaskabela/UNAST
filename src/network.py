@@ -133,12 +133,8 @@ class TextRNN(AutoEncoderNet):
     def preprocess(self, raw_input_tensor):
         # raw_input_tensor should be a LongTensor of size [batch_size x seq_len x 1]
         # should already be padded as well
-        print("Raw shape is: ", raw_input_tensor.shape)
-        print("Raw type is: ", raw_input_tensor.type)
-
         # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
         pad_mask = raw_input_tensor.eq(PAD_IDX).float().squeeze() 
-        print("Mask shape is: ", pad_mask.shape)
         return self.prenet(raw_input_tensor), pad_mask
 
     def encode(self, raw_input_tensor):
@@ -190,7 +186,6 @@ class TextRNN(AutoEncoderNet):
     def postprocess(self, dec_output, distrib=False):
         
         final_out = self.postnet(dec_output)
-        print("Final output shape is: ", final_out.shape)
         if distrib:
             # If we want to return distribution, take log softmax!
             return F.log_softmax(final_out, dim=-1)
