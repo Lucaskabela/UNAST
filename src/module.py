@@ -3,6 +3,8 @@ Contains the nn.Modules which compose the networks. This includes modules
 for preprocessing speech and text, the transformer & RNN encoder/decoder, & post
 processing modules for text and speech.
 '''
+import copy
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -73,34 +75,87 @@ class SpeechPrenet(nn.Module):
     
     As described in Ren's paper, 2-layer dense-connected network
     with hidden size of 256, and the output dimension equals to
-    the hidden size of Transformer. Note that the dropout is
-    removed here, which differs from what's in Transformer-TTS.
+    the hidden size of Transformer.
     """
-    def __init__(self, input_size, hidden_size, output_size):
+    def __init__(self, num_mels, hidden_size, output_size, p=0.5):
         """
-        :param input_size: dimension of input
+        :param num_mels: number of mel filters
         :param hidden_size: dimension of hidden unit
         :param output_size: dimension of output
+        :param p: dropout probability (zero-out probability)
         """
         super(SpeechPrenet, self).__init__()
-        self.input_size = input_size
+        self.input_size = num_mels
         self.output_size = output_size
         self.hidden_size = hidden_size
         self.layer = nn.Sequential(OrderedDict([
              ('fc1', Linear(self.input_size, self.hidden_size)),
              ('relu1', nn.ReLU()),
+             ('dropout2', nn.Dropout(p)),
              ('fc2', Linear(self.hidden_size, self.output_size)),
              ('relu2', nn.ReLU()),
+             ('dropout2', nn.Dropout(p)),
         ]))
 
     def forward(self, input_):
+        """
+        :param input_: Tensor of mel-spectrogram input (input_mel),
+                       these should be of dimensions [batch, length, num_mels]
+        """
         out = self.layer(input_)
         return out
 
+    
 class SpeechPostnet(nn.Module):
-    # TODO: Fill in from TTS repo :) 
-    def __init__(self):
+    """
+    PostNet for Speech Decoder copied from Transformer-TTS.
+    
+    There are 5 layers of 1D convolutions as specified in Ren's
+    paper, and this convolution network aims to refine the
+    quality of the generated mel-spectrograms.
+    """
+    def __init__(self, num_mels, num_hidden, p=0.1):
+        """
+        :param num_mels: number of mel filters
+        :param num_hidden: dimension of hidden unit
+        :param p: dropout probability (zero-out probability)
+        """
         super(SpeechPostnet, self).__init__()
+        self.conv1 = Conv(in_channels=num_mels,
+                          out_channels=num_hidden,
+                          kernel_size=5,
+                          padding=4,
+                          w_init='tanh')
+        self.conv_list = nn.ModuleList([Conv(in_channels=num_hidden,
+                                             out_channels=num_hidden,
+                                             kernel_size=5,
+                                             padding=4,
+                                             w_init='tanh')
+                                        for _ in range(3)])
+        self.conv2 = Conv(in_channels=num_hidden,
+                          out_channels=num_mels,
+                          kernel_size=5,
+                          padding=4)
+
+        self.batch_norm_list = nn.ModuleList([nn.BatchNorm1d(num_hidden)
+                                                  for _ in range(3)])
+        self.pre_batchnorm = nn.BatchNorm1d(num_hidden)
+
+        self.dropout1 = nn.Dropout(p=p)
+        self.dropout_list = nn.ModuleList([nn.Dropout(p=p) for _ in range(3)])
+
+    def forward(self, input_):
+        """
+        :param input_: Tensor of mel-spectrogram output from decoder,
+                       these should be of dimensions [batch, num_mels, length]
+        """
+        # Causal Convolution (for auto-regressive)
+        input_ = self.dropout1(torch.tanh(self.pre_batchnorm(self.conv1(input_)[:, :, :-4])))
+        for batch_norm, conv, dropout in zip(self.batch_norm_list, self.conv_list, self.dropout_list):
+            input_ = dropout(torch.tanh(batch_norm(conv(input_)[:, :, :-4])))
+        input_ = self.conv2(input_)[:, :, :-4]
+        return input_
+
 
 class TextPrenet(nn.Module):
     """
@@ -146,6 +201,9 @@ class TextPrenet(nn.Module):
         self.projection = Linear(num_hidden, num_hidden)
 
     def forward(self, input_):
+        """
+        :param input_: Tensor of Phoneme IDs (text)
+        """
         input_ = self.embed(input_) 
         input_ = input_.transpose(1, 2) 
         input_ = self.dropout1(torch.relu(self.batch_norm1(self.conv1(input_)))) 
