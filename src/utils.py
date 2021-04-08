@@ -9,6 +9,7 @@ import audio_parameters as ap
 import json
 import sys
 import torch.utils.tensorboard as tb
+import shutil
 
 PAD_IDX = 0
 
@@ -40,6 +41,50 @@ def init_logger(log_dir=None):
         train_logger = tb.SummaryWriter(path.join(log_dir, "train"))
         valid_logger = tb.SummaryWriter(path.join(log_dir, "valid"))
     return train_logger, valid_logger
+
+
+# Next two methods courtesy of: https://towardsdatascience.com/how-to-save-and-load-a-model-in-pytorch-with-a-complete-example-c2920e617dee
+def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):
+    """
+    state: checkpoint we want to save.  State is a dict with keys:
+            ['epoch','valid_loss_min', 'state_dict', 'optimizer']
+    is_best: is this the best checkpoint; min validation loss
+    checkpoint_path: path to save checkpoint
+    best_model_path: path to save best model
+    """
+    state = {
+        'epoch': epoch + 1,
+        'valid_loss_min': valid_loss,
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+    }
+
+    f_path = checkpoint_path + '/model_{}.ckpt'.format(state['epoch'])
+    # save checkpoint data to the path given, checkpoint_path
+    torch.save(state, f_path)
+    # if it is a best model, min validation loss
+    if is_best:
+        best_fpath = checkpoint_path + '/model_best.ckpt'
+        # copy that checkpoint file to best path given, best_model_path
+        shutil.copyfile(f_path, best_fpath)
+
+
+def load_ckp(checkpoint_fpath, model, optimizer):
+    """
+    checkpoint_path: path to save checkpoint
+    model: model that we want to load checkpoint parameters into       
+    optimizer: optimizer we defined in previous training
+    """
+    # load check point
+    checkpoint = torch.load(checkpoint_fpath)
+
+    # initialize state_dicts from checkpoint to model
+    model.load_state_dict(checkpoint['state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+
+
+    return checkpoint['epoch'], checkpoint['valid_loss_min'], model, optimizer
+
 
 def parse_with_config(parser):
     """

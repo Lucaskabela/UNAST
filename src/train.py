@@ -5,7 +5,7 @@ Contains the code for training the encoder/decoders, including:
     - Denoising loss
     - Discriminator loss
 '''
-from utils import set_seed, parse_with_config
+from utils import set_seed, parse_with_config, PAD_IDX
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
 from network import AutoEncoderNet
@@ -45,8 +45,36 @@ def crossmodel_loss(output, target):
 def discriminator_loss(output, target):
     return F.cross_entropy(output, target)
 
-def evaluate():
-    raise Exception("Not implemented yet!")
+def evaluate(text_model, speech_model, valid_dataset):
+    """
+        Expect validation set to have paired speech & text!
+        We evaluate on 4 metrics:  autoencoder text loss, autoencdoer speech loss,
+            ASR (evaluated by PER), and TTS (evaluated by MSE). 
+    """
+    text_model.eval()
+    speech_model.eval()
+    with torch.no_grad():
+        ae_text_loss, ae_speech_loss, per, tts_err = 0, 0, 0, 0
+        avg_constant = 0
+        for data in valid_dataset:
+            character, mel, mel_input, pos_text, pos_mel, text_len = data
+
+            enc_text, text_hidden_state, text_pad_mask = text_model.encode(character)
+
+            # TODO: decoding here!
+            decoded_text = None
+
+            ae_text_loss += autoencoder_loss(decoded_text, character).item()
+            ae_speech_loss += autoencoder_loss(decoded_speech, mel_input).detach().item()
+            #per += crossmodel_loss().item()
+            #tts_err += crossmodel_loss().item()
+            avg_constant += 1
+
+    text_model.train()
+    speech_model.train()
+    ae_text_loss, ae_speech_loss = ae_text_loss / avg_constant, ae_speech_loss / avg_constant
+    per, tts_err = per / avg_constant, tts_err / avg_constant
+    return ae_text_loss, ae_speech_loss, per, tts_err
 
 def train(args):
     '''
@@ -102,9 +130,9 @@ def train(args):
             if train_log is not None:
                 train_log.add_scalar("loss", losses[-1], global_step)
             global_step += 1
-        # with torch.no_grad():
-            # evaluate(model, valid_dataset)
-        # TODO: Add evaluation code
+
+        # evaluate(model, valid_dataset)
+
         avg_l = np.mean(losses)
         print("epoch %-3d \t loss = %0.3f \t" % (epoch, avg_l))
         # if validation < best:
