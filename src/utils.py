@@ -10,6 +10,7 @@ import json
 import sys
 import torch.utils.tensorboard as tb
 
+PAD_IDX = 0
 
 def set_seed(seed):
     '''
