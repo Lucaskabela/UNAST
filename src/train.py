@@ -11,6 +11,8 @@ from tqdm import tqdm
 import audio_parameters as ap
 import argparse
 import torch.nn.functional as F
+import torch.nn as nn
+import torch
 
 
 # TODO: Refactor these losses...
@@ -62,25 +64,47 @@ def train(args):
         TODO: Include functionality for saving, loading from save
     '''
     set_seed(args.seed)
+
+    # TODO: Replace get_dataset() with getting train/valid/test split
     dataset = get_dataset()
+    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+    
     # init models and optimizers
-    model = None
-    optimizer = None
+    text_pre = TextPrenet(args.phoneme_embedding_size, args.hidden_size)
+    encoder = RNNEncoder(args.hidden_size, args.hidden_size, args.latent_size, bidirectional=False)
+    decoder = RNNDecoder(args.latent_size, args.hidden_size, args.hidden_size, args.decoder_out, attention=False)
+    text_post = TextPostnet(args.decoder_out, args.hidden_size)
+
+    model = AutoEncoderNet(text_pre, encoder, decoder, text_post)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,  weight_decay=1e-5)
+
+    global_step = 0
 
     for epoch in range(args.epochs):
-        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
-
-        pbar = tqdm(dataloader)
-        for i, data in enumerate(pbar):
-            pbar.set_description("Processing at epoch %d"%epoch)
-
+        losses = []
+        for data in dataloader:
             character, mel, mel_input, pos_text, pos_mel, _ = data
-
-        for batch in dataloader:
-            # choose loss function here!
-            model.decode(model.encode(batch))
-        evaluate(model, valid_dataset)
-
+            return_vals = model.encode(character)
+            output = model.decode(return_vals)
+            loss = F.cross_entropy(output, character)
+            
+            optimizer.zero_grad()
+            loss.backward()
+            if args.grad_clip > 0.0:
+                nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+            optimizer.step()
+            losses.append(loss.detach().cpu().numpy())
+            if train_log is not None:
+                train_log.add_scalar("loss", losses[-1], global_step)
+            global_step += 1
+        # with torch.no_grad():
+            # evaluate(model, valid_dataset)
+        avg_l = np.mean(losses)
+        print("epoch %-3d \t loss = %0.3f \t" % (epoch, avg_l))
+        # if validation < best:
+        #     print("Saving model!")
+        #     best = validation
+        #     model.save_model()
     return model
 
 

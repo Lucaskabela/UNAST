@@ -156,11 +156,20 @@ class TextPrenet(nn.Module):
         return input_
 
 class TextPostnet(nn.Module):
-    # TODO: Fill in from TTS repo :) 
-    def __init__(self):
-        super(TextPostnet, self).__init__()
+    """
 
-# TODO: Consider adding Encoder/Decoder base class here
+    """
+    def __init__(self, d_out, hidden):
+        super(TextPostnet, self).__init__()
+        self.fc1 = nn.Linear(d_out, hidden)
+        self.dropout1 = nn.Dropout(p=0.2)
+        self.fc2 = nn.Linear(hidden, len(symbols))
+
+    def forward(self, decode_out):
+        """
+        Need to do log softmax if you want probabilities
+        """
+        return self.fc2(self.drouput1(torch.relu(self.fc1(decode_out))))
 
 class TransformerEncoder(nn.Module):
     # TODO: Fill in from TTS repo :) 

@@ -8,6 +8,8 @@ import librosa
 import audio_parameters as ap
 import json
 import sys
+import torch.utils.tensorboard as tb
+
 
 def set_seed(seed):
     '''
@@ -21,6 +23,22 @@ def set_seed(seed):
     torch.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
+
+
+def init_device():
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    return device
+
+
+def init_logger(log_dir=None):
+    train_logger, valid_logger = None, None
+    if log_dir is not None:
+        train_logger = tb.SummaryWriter(path.join(log_dir, "train"))
+        valid_logger = tb.SummaryWriter(path.join(log_dir, "valid"))
+    return train_logger, valid_logger
 
 def parse_with_config(parser):
     """

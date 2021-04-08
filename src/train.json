@@ -1,14 +1,16 @@
 {
     "epochs": 10000,
     "seed": 0,
-    "lr": 0.001,
+    "lr": 3e-4,
     "save_step": 2000,
     "image_step": 500,
     "batch_size": 32,
     "checkpoint_path": "./checkpoint",
     "sample_path": "./samples",
-    
     "num_mels": 80,
     "phoneme_embedding_size": 512,
     "hidden_size": 256,
+    "latent_size": 256,
+    "decoder_out": 128,
+    "grad_clip": 1.0,
 }
