@@ -12,6 +12,8 @@ import torch.utils.tensorboard as tb
 import shutil
 
 PAD_IDX = 0
+SOS_IDX = 1
+EOS_idx = 2
 
 def set_seed(seed):
     '''

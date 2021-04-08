@@ -8,7 +8,7 @@ Contains the code for training the encoder/decoders, including:
 from utils import set_seed, parse_with_config, PAD_IDX
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
-from network import AutoEncoderNet
+from network import TextRNN
 from tqdm import tqdm
 import audio_parameters as ap
 import argparse
@@ -98,14 +98,8 @@ def train(args):
     # TODO: Replace get_dataset() with getting train/valid/test split
     dataset = get_dataset()
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
-    
-    # init models and optimizers
-    text_pre = TextPrenet(args.phoneme_embedding_size, args.hidden_size)
-    encoder = RNNEncoder(args.hidden_size, args.hidden_size, args.latent_size, bidirectional=False)
-    decoder = RNNDecoder(args.latent_size, args.hidden_size, args.hidden_size, args.decoder_out, attention=False)
-    text_post = TextPostnet(args.decoder_out, args.hidden_size)
 
-    model = AutoEncoderNet(text_pre, encoder, decoder, text_post)
+    model = TextRNN(args)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,  weight_decay=1e-5)
 
     global_step = 0
@@ -114,19 +108,18 @@ def train(args):
         losses = []
         for data in dataloader:
             character, mel, mel_input, pos_text, pos_mel, text_len = data
-            encoder_outputs, latent_hidden = model.encode(character)
-            # TODO: compute context masks for sequence here, something like `c_mask = character.ne(0)`
-            # TODO: Add <SOS>, <EOS>, and <PAD> special chars (already in symbols?) and add <SOS>, <EOS> to examples
-            # TODO: Fix the model api!!!
-            output = model.decode(latent_hidden, encoder_outputs)
-            loss = F.cross_entropy(output, character)
+            encoder_outputs, latent_hidden, pad_mask = model.encode(character)
+            print(text_len.shape)
+            pred = model.decode_sequence(character, latent_hidden, encoder_outputs, pad_mask)
+            
+            loss = F.cross_entropy(pred, character, ignore_index=PAD_IDX)
             
             optimizer.zero_grad()
             loss.backward()
             if args.grad_clip > 0.0:
                 nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
-            losses.append(loss.detach().cpu().numpy())
+            losses.append(loss.detach().cpu().item())
             if train_log is not None:
                 train_log.add_scalar("loss", losses[-1], global_step)
             global_step += 1

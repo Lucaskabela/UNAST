@@ -7,7 +7,8 @@ These modules are pre, encoder, a decoder, a post, and optional discriminator.
 
 import torch.nn as nn
 from module import *
-from utils import PAD_IDX
+from utils import PAD_IDX, SOS_IDX,  EOS_IDX
+import random
 
 class AutoEncoderNet(nn.Module):
     # Speech net will use speech prenet/postnet, similarly with text
@@ -155,6 +156,23 @@ class TextRNN(AutoEncoderNet):
         enc_output, hidden_state = self.encoder(embedded_phonemes)
         return enc_output, hidden_state, pad_mask
 
+    def decode_sequence(self, target, hidden_state, enc_output, enc_ctxt_mask, teacher_ratio=1):
+        """
+        For easier training!  target is teacher forcing [batch_size x seq_len]
+        """
+        batch_size, max_out_len = target.shape[0], target.shape[1]
+        outputs = []
+        input_ = torch.from_numpy(np.asarray([SOS_IDX for i in range(0, batch_size)]))
+        for i in range(max_out_len):
+            input_embed = self.prenet.embed(input_)
+            dec_out, hidden_state = self.decode(input_embed, hidden_state, enc_output, enc_ctxt_mask)
+            outputs.append(dec_out)
+            if random.random() < teacher_ratio:
+                input_ = target[:, i]
+            else:
+                input_ = torch.argmax(dec_out, dim=-1).squeeze()
+                print(input.shape)
+        return torch.stack(outputs)
 
     def decode(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
         """
