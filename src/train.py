@@ -7,6 +7,8 @@ Contains the code for training the encoder/decoders, including:
 '''
 from utils import set_seed, parse_with_config
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
+from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
+from network import AutoEncoderNet
 from tqdm import tqdm
 import audio_parameters as ap
 import argparse
@@ -83,9 +85,12 @@ def train(args):
     for epoch in range(args.epochs):
         losses = []
         for data in dataloader:
-            character, mel, mel_input, pos_text, pos_mel, _ = data
-            return_vals = model.encode(character)
-            output = model.decode(return_vals)
+            character, mel, mel_input, pos_text, pos_mel, text_len = data
+            encoder_outputs, latent_hidden = model.encode(character)
+            # TODO: compute context masks for sequence here, something like `c_mask = character.ne(0)`
+            # TODO: Add <SOS>, <EOS>, and <PAD> special chars (already in symbols?) and add <SOS>, <EOS> to examples
+            # TODO: Fix the model api!!!
+            output = model.decode(latent_hidden, encoder_outputs)
             loss = F.cross_entropy(output, character)
             
             optimizer.zero_grad()
@@ -99,9 +104,11 @@ def train(args):
             global_step += 1
         # with torch.no_grad():
             # evaluate(model, valid_dataset)
+        # TODO: Add evaluation code
         avg_l = np.mean(losses)
         print("epoch %-3d \t loss = %0.3f \t" % (epoch, avg_l))
         # if validation < best:
+        # TODO: Add model (and optimizer) saving for reloading training
         #     print("Saving model!")
         #     best = validation
         #     model.save_model()
@@ -111,5 +118,6 @@ def train(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', help='JSON config files')
+    # TODO: clean up the parser/initialization of models
     args = parse_with_config(parser)
     train(args)

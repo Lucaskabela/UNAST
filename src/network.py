@@ -11,6 +11,7 @@ from module import *
 class AutoEncoderNet(nn.Module):
     # Speech net will use speech prenet/postnet, similarly with text
     def __init__(prenet, encoder, decoder, postnet):
+        super(AutoEncoderNet, self).__init__()
         self.prenet = prenet
         self.encoder = encoder
         self.decoder = decoder
@@ -52,7 +53,7 @@ class AutoEncoderNet(nn.Module):
         '''
         return self.encoder(self.preprocess(raw_input_tensor))
 
-    def decode(self, latent_tensor, attention_stuff, teacher_sequence):
+    def decode(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
         '''
         Decodes a latent_tensor using the decoder & postnet, returning output for 
         evaluation
@@ -69,7 +70,8 @@ class AutoEncoderNet(nn.Module):
                     phonemes
                 + For speech, dim will be the ??? which is something log filter related
         '''
-        return self.postprocess(self.decoder(latent_tensor, attention_stuff, teacher_sequence))
+        # TODO: Change this API ever so slightly
+        return self.postprocess(self.decoder(embed_decode, hidden_state, enc_output, enc_ctxt_mask))
 
     def postprocess(self, decoded_latent):
         '''

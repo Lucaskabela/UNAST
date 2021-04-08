@@ -12,5 +12,5 @@
     "hidden_size": 256,
     "latent_size": 256,
     "decoder_out": 128,
-    "grad_clip": 1.0,
+    "grad_clip": 1.0
 }
