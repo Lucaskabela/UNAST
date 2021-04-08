@@ -103,31 +103,31 @@ class Discriminator(nn.Module):
     
 class SpeechTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
-    def __init_(self, args):
+    def __init__(self, args):
         super(SpeechTransformer, self).__init__()
 
 
 class SpeechRNN(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
-    def __init_(self, args):
+    def __init__(self, args):
         super(SpeechRNN, self).__init__()
 
 
 class TextTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
-    def __init_(self, args):
+    def __init__(self, args):
         super(TextTransformer, self).__init__()
 
 
 class TextRNN(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
-    def __init_(self, args):
+    def __init__(self, args):
         super(TextRNN, self).__init__()
         self.prenet = TextPrenet(args.embed_dim, args.e_in)
         self.encoder = RNNEncoder(args.e_in, args.hidden, args.e_out, 
-            dropout=args.e_p, num_layers=args.e_layers, bidirectional=args.e_bi)
+            dropout=args.e_p, num_layers=args.e_layers, bidirectional=bool(args.e_bi))
         self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.d_out, 
-            dropout=args.d_p, num_layers=args.d_layers, attention=args.d_attn)
+            dropout=args.d_p, num_layers=args.d_layers, attention=bool(args.d_attn))
         self.postnet = TextPostnet(args.d_out, args.hidden)
 
     def preprocess(self, raw_input_tensor):
@@ -138,7 +138,7 @@ class TextRNN(AutoEncoderNet):
 
         # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
         pad_mask = raw_input_tensor.eq(PAD_IDX).float().squeeze() 
-        print("Mask shape is: ", c_mask.shape)
+        print("Mask shape is: ", pad_mask.shape)
         return self.prenet(raw_input_tensor), pad_mask
 
     def encode(self, raw_input_tensor):
@@ -164,15 +164,14 @@ class TextRNN(AutoEncoderNet):
         outputs = []
         input_ = torch.from_numpy(np.asarray([SOS_IDX for i in range(0, batch_size)]))
         for i in range(max_out_len):
-            input_embed = self.prenet.embed(input_)
+            input_embed = self.prenet.embed(input_).unsqueeze(1)
             dec_out, hidden_state = self.decode(input_embed, hidden_state, enc_output, enc_ctxt_mask)
             outputs.append(dec_out)
             if random.random() < teacher_ratio:
                 input_ = target[:, i]
             else:
                 input_ = torch.argmax(dec_out, dim=-1).squeeze()
-                print(input.shape)
-        return torch.stack(outputs)
+        return torch.stack(outputs, dim=1).squeeze(2)
 
     def decode(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
         """
@@ -195,3 +194,5 @@ class TextRNN(AutoEncoderNet):
         if distrib:
             # If we want to return distribution, take log softmax!
             return F.log_softmax(final_out, dim=-1)
+        else:
+            return final_out

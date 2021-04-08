@@ -8,7 +8,7 @@
     "checkpoint_path": "./checkpoint",
     "sample_path": "./samples",
     "num_mels": 80,
-    "embed_dim": 512,
+    "embed_dim": 256,
     "hidden": 256,
     "e_in": 256,
     "e_out": 256,

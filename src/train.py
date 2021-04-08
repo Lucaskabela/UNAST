@@ -5,7 +5,7 @@ Contains the code for training the encoder/decoders, including:
     - Denoising loss
     - Discriminator loss
 '''
-from utils import set_seed, parse_with_config, PAD_IDX
+from utils import set_seed, parse_with_config, PAD_IDX, init_device
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
 from network import TextRNN
@@ -16,6 +16,7 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torch
 
+DEVICE = init_device()
 
 # TODO: Refactor these losses...
 def autoencoder_loss(output, target, speech=False):
@@ -98,8 +99,8 @@ def train(args):
     # TODO: Replace get_dataset() with getting train/valid/test split
     dataset = get_dataset()
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
-
-    model = TextRNN(args)
+    train_log, valid_log = None, None
+    model = TextRNN(args).to(DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,  weight_decay=1e-5)
 
     global_step = 0
@@ -108,11 +109,13 @@ def train(args):
         losses = []
         for data in dataloader:
             character, mel, mel_input, pos_text, pos_mel, text_len = data
+            character = character.to(DEVICE)
             encoder_outputs, latent_hidden, pad_mask = model.encode(character)
-            print(text_len.shape)
             pred = model.decode_sequence(character, latent_hidden, encoder_outputs, pad_mask)
             
-            loss = F.cross_entropy(pred, character, ignore_index=PAD_IDX)
+            pred_ = pred.permute(1, 2, 0)
+            char_ = character.permute(1, 0)
+            loss = F.cross_entropy(pred_, char_, ignore_index=PAD_IDX)
             
             optimizer.zero_grad()
             loss.backward()

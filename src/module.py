@@ -169,7 +169,7 @@ class TextPostnet(nn.Module):
         """
         Need to do log softmax if you want probabilities
         """
-        return self.fc2(self.drouput1(torch.relu(self.fc1(decode_out))))
+        return self.fc2(self.dropout1(torch.relu(self.fc1(decode_out))))
 
 class TransformerEncoder(nn.Module):
     # TODO: Fill in from TTS repo :) 
