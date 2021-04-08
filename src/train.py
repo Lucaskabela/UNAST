@@ -108,16 +108,16 @@ def train(args):
                 # with this unsupervised_batch
                 pass
 
-        # Train discriminator
-        discriminator_dataloader = DataLoader(full_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+        if args.train_discriminator:
+            # Train discriminator
+            discriminator_dataloader = DataLoader(full_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
 
-        bar = tqdm(discriminator_dataloader)
-        bar.set_description("Epoch {} Training Discriminator".format(epoch))
-        for batch in bar:
-            # TODO: Freeze model
-            # TODO: Train discriminator over the whole train dataset
-            pass
-
+            bar = tqdm(discriminator_dataloader)
+            bar.set_description("Epoch {} Training Discriminator".format(epoch))
+            for batch in bar:
+                # TODO: Freeze model
+                # TODO: Train discriminator over the whole train dataset
+                pass
 
     return model
 
