@@ -622,3 +622,34 @@ class TextRNN(AutoEncoderNet):
         if ret_enc_hid:
             return pred, encoder_outputs
         return pred
+
+
+class MelToSpeechNet(nn.Module):
+    """
+    CBHG Network, copied from Transformer-TTS.
+
+    Uses a CBHG network to convert mel-spectrogram to the
+    magnitude spectrogram, which is then converted to wavs.
+    """
+    def __init__(self, num_mels, hidden_size, num_fft):
+        """
+        :param num_mels: Number of mel filters
+        :param hidden_size: Convolution hidden channels
+        :param num_fft: Number of FFTs
+        """
+        super(MelToSpeechNet, self).__init__()
+        self.pre_projection = Conv(num_mels, hidden_size)
+        self.cbhg = CBHG(hidden_size)
+        self.post_projection = Conv(hidden_size, (num_fft // 2) + 1)
+
+    def forward(self, mel):
+        """
+        :param input_: Tensor of saved mel-spectrogram output from SpeechPostNet,
+                       these should be of dimensions [batch, length, num_mels]
+        """
+        mel = mel.transpose(1, 2)
+        mel = self.pre_projection(mel)
+        mel = self.cbhg(mel).transpose(1, 2)
+        mag_pred = self.post_projection(mel).transpose(1, 2)
+
+        return mag_pred
