@@ -1,6 +1,6 @@
 {
-    "epochs": 10000,
     "seed": 0,
+    "epochs": 100,
     "lr": 3e-4,
     "save_step": 2000,
     "image_step": 500,
