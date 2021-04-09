@@ -114,7 +114,7 @@ class SpeechRNN(AutoEncoderNet):
         self.prenet = SpeechPrenet(args.num_mels, args.hidden, args.e_in)
         self.encoder = RNNEncoder(args.e_in, args.hidden, args.e_out, 
             dropout=args.e_p, num_layers=args.e_layers, bidirectional=bool(args.e_bi))
-        self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.d_out, 
+        self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.num_mels, 
             dropout=args.d_p, num_layers=args.d_layers, attention=bool(args.d_attn))
         self.postnet = SpeechPostnet(args.num_mels, args.hidden)
     
@@ -142,14 +142,15 @@ class SpeechRNN(AutoEncoderNet):
         enc_output, hidden_state = self.encoder(mel_features)
         return enc_output, hidden_state, pad_mask
 
-    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=1000, batch_size=1):
+    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=1000):
 
+        batch_size = enc_output.shape[0]
         outputs = []
         stops = []
-        stop_lens = torch.zeros(batch_size).to(enc_output.device())
+        stop_lens = torch.zeros(batch_size).to(enc_output.device)
         
         # get a all 0 frame for first timestep
-        input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device())
+        input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
         i = 0
         keep_gen = torch.all(stop_lens.neq(0)) and i < max_len
 
@@ -183,16 +184,16 @@ class SpeechRNN(AutoEncoderNet):
         outputs = []
         stops = []
         # get a all 0 frame for first timestep
-        input_ = torch.zeros((batch_size, 1, target.shape[2]), device=target.device())
+        input_ = torch.zeros((batch_size, 1, target.shape[2]), device=target.device)
         for i in range(max_out_len):
-            dec_out, stop_pred, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
-            stops.apped(stop_pred)
+            (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
+            stops.append(stop_pred)
             outputs.append(dec_out)
             if random.random() < teacher_ratio:
                 input_ = target[:, i, :].unsqueeze(1)
             else:
                 input_ = outputs[-1]
-        return torch.stack(outputs, dim=1).squeeze(2), torch.stack(stops, dim=1).squeeze(-1)
+        return torch.stack(outputs, dim=1).squeeze(), torch.stack(stops, dim=1).squeeze()
 
     def decode(self, input_, hidden_state, enc_output, enc_ctxt_mask):
         """
@@ -205,7 +206,8 @@ class SpeechRNN(AutoEncoderNet):
                 + For speech, dim will be the ??? which is something log filter related
             - dec_hidden: (h_n, c_n) from decoder LSTM
         """
-        dec_output, dec_hidden = self.decoder(embed_decode, hidden_state, enc_output, enc_ctxt_mask)
+        input_ = self.prenet(input_)
+        dec_output, dec_hidden = self.decoder(input_, hidden_state, enc_output, enc_ctxt_mask)
         return self.postprocess(dec_output), dec_hidden
 
     def postprocess(self, dec_output, distrib=False):
@@ -290,10 +292,11 @@ class TextRNN(AutoEncoderNet):
         else:
             return final_out
 
-    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=250, batch_size=1):
+    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=250):
 
+        batch_size = enc_output.shape[0]
         outputs = []
-        seq_lens = torch.zeros(batch_size).to(enc_output.device())
+        seq_lens = torch.zeros(batch_size).to(enc_output.device)
         
         # get a all 0 frame for first timestep
         input_ = torch.from_numpy(np.asarray([SOS_IDX for i in range(0, batch_size)]))

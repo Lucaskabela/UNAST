@@ -8,7 +8,7 @@ Contains the code for training the encoder/decoders, including:
 from utils import set_seed, parse_with_config, PAD_IDX, init_device
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
-from network import TextRNN
+from network import TextRNN, SpeechRNN
 from tqdm import tqdm
 import audio_parameters as ap
 import argparse
@@ -20,7 +20,7 @@ import numpy as np
 DEVICE = init_device()
 
 # TODO: Refactor these losses...
-def autoencoder_loss(output, target, speech=False):
+def loss_fn(output, target, speech=False):
     '''
         Computes the NLL loss between output and target
     '''
@@ -30,22 +30,20 @@ def autoencoder_loss(output, target, speech=False):
     else:
         return F.cross_entropy(output, target, ignore_index=PAD_IDX)
 
-def supervised_loss(output, target):
-    PAD_IDX = 0
-    if speech:
-        return F.mse_loss(output, target)
-    else:
-        return F.cross_entropy(output, target, ignore_index=PAD_IDX)
-
-def crossmodel_loss(output, target):
-    PAD_IDX = 0
-    if speech:
-        return F.mse_loss(output, target)
-    else:
-        return F.cross_entropy(output, target, ignore_index=PAD_IDX)
 
 def discriminator_loss(output, target):
     return F.cross_entropy(output, target)
+
+
+def eval_text_auto(target, hidden_state, enc_output, enc_ctxt_mask, text_model):
+    res = text_model.infer_sequence(hidden_state, enc_output, enc_ctxt_mask, max_len=target.shape[1])
+    loss = loss_fn(res, target).item()
+    return loss
+
+def eval_speech_auto(target, hidden_state, enc_output, enc_ctxt_mask, text_model):
+    res = text_model.infer_sequence(hidden_state, enc_output, enc_ctxt_mask, max_len=target.shape[1])
+    loss = loss_fn(res, target).item()
+    return loss
 
 def evaluate(text_model, speech_model, valid_dataset):
     """
@@ -60,13 +58,15 @@ def evaluate(text_model, speech_model, valid_dataset):
         avg_constant = 0
         for data in valid_dataset:
             character, mel, mel_input, pos_text, pos_mel, text_len = data
-
+            character = character.to(DEVICE)
+            mel = mel.to(DEVICE)
             enc_text, text_hidden_state, text_pad_mask = text_model.encode(character)
+            enc_speech, speech_hidden_state, speech_pad_mask = speech_model.encode(mel)
 
             # TODO: decoding here!
             decoded_text = None
 
-            ae_text_loss += autoencoder_loss(decoded_text, character).item()
+            ae_text_loss += eval_text_auto(character, text_hidden_state, enc_text, enc_ctxt_mask, text_model)
             ae_speech_loss += autoencoder_loss(decoded_speech, mel_input).detach().item()
             #per += crossmodel_loss().item()
             #tts_err += crossmodel_loss().item()
@@ -177,13 +177,11 @@ def train_speech_auto(args):
         losses = []
         for data in dataloader:
             character, mel, mel_input, pos_text, pos_mel, text_len = data
-            print(mel.shape)
-            print(mel_input.shape)
-            mel = mel.to(DEVICE)
-            encoder_outputs, latent_hidden, pad_mask = model.encode(mel)
-            pred = model.decode_sequence(mel, latent_hidden, encoder_outputs, pad_mask)
+            mel_input = mel_input.to(DEVICE)
+            encoder_outputs, latent_hidden, pad_mask = model.encode(mel_input)
+            pred, stop_pred = model.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
             
-            loss = F.cross_entropy(pred, mel)
+            loss = F.mse_loss(pred, mel_input)
             
             optimizer.zero_grad()
             loss.backward()
