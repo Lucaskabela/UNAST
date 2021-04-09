@@ -289,3 +289,34 @@ class TextRNN(AutoEncoderNet):
             return F.log_softmax(final_out, dim=-1)
         else:
             return final_out
+
+    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=250, batch_size=1):
+
+        outputs = []
+        seq_lens = torch.zeros(batch_size).to(enc_output.device())
+        
+        # get a all 0 frame for first timestep
+        input_ = torch.from_numpy(np.asarray([SOS_IDX for i in range(0, batch_size)]))
+        i = 0
+        keep_gen = torch.all(stop_lens.neq(0)) and i < max_len
+
+        while keep_gen:
+            input_embed = self.prenet.embed(input_).unsqueeze(1)
+            dec_out, hidden_state = self.decode(input_embed, hidden_state, enc_output, enc_ctxt_mask)
+            input_ = torch.argmax(dec_out, dim=-1).squeeze()
+            # set stop_lens here!
+            outputs.append(input_)
+            i += 1
+
+            # double check this!
+            stop_mask = (input_ == EOS_IDX).logical_and(seq_lens == 0)
+            seq_lens[stop_mask] = i
+            keep_gen = torch.all(seq_lens.neq(0)) and i < max_len
+
+        # Maybe this is a bit overkil...
+        seq_lens = seq_lens.masked_fill(seq_lens == 0, len(outputs))
+        pad_mask = sent_lens_to_mask(seq_lens, len(outputs))
+
+        res = torch.stack(outputs, dim=1).squeeze(2)
+        res = res.masked_fill(pad_mask, PAD_IDX)
+        return res
