@@ -111,7 +111,12 @@ class SpeechRNN(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
     def __init__(self, args):
         super(SpeechRNN, self).__init__()
-
+        self.prenet = SpeechPrenet(args.speech_in, args.hidden, args.e_in)
+        self.encoder = RNNEncoder(args.e_in, args.hidden, args.e_out, 
+            dropout=args.e_p, num_layers=args.e_layers, bidirectional=bool(args.e_bi))
+        self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.d_out, 
+            dropout=args.d_p, num_layers=args.d_layers, attention=bool(args.d_attn))
+        self.postnet = SpeechPostnet(args.d_out, args.hidden)
 
 class TextTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec

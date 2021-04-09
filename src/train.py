@@ -15,6 +15,7 @@ import argparse
 import torch.nn.functional as F
 import torch.nn as nn
 import torch
+import numpy as np
 
 DEVICE = init_device()
 
@@ -98,9 +99,12 @@ def train(args):
 
     # TODO: Replace get_dataset() with getting train/valid/test split
     dataset = get_dataset()
+    #NOTE: Subset for prototyping
+    # dataset = torch.utils.data.Subset(dataset, range(1000))
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
     train_log, valid_log = None, None
     model = TextRNN(args).to(DEVICE)
+    print("Sent model to", DEVICE)
     optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,  weight_decay=1e-5)
 
     global_step = 0
