@@ -1,5 +1,5 @@
 '''
-Contains the nn.Modules which compose the networks. This includes modules 
+Contains the nn.Modules which compose the networks. This includes modules
 for preprocessing speech and text, the transformer & RNN encoder/decoder, & post
 processing modules for text and speech.
 '''
@@ -14,7 +14,7 @@ from data.symbols import symbols
 class Linear(nn.Module):
     """
     Linear Module copied from Transformer-TTS.
-    
+
     A linear layer initialized using the Xavier Uniform method.
     """
     def __init__(self, in_dim, out_dim, bias=True, w_init='linear'):
@@ -37,7 +37,7 @@ class Linear(nn.Module):
 class Conv(nn.Module):
     """
     Convolution Module copied from Transformer-TTS.
-    
+
     A 1D convolution layer initialized using the Xavier Uniform
     method.
     """
@@ -70,42 +70,95 @@ class Conv(nn.Module):
 class SpeechPrenet(nn.Module):
     """
     Prenet for Speech Encoder copied from Transformer-TTS.
-    
+
     As described in Ren's paper, 2-layer dense-connected network
     with hidden size of 256, and the output dimension equals to
-    the hidden size of Transformer. Note that the dropout is
-    removed here, which differs from what's in Transformer-TTS.
+    the hidden size of Transformer.
     """
-    def __init__(self, input_size, hidden_size, output_size):
+    def __init__(self, num_mels, hidden_size, output_size, p=0.5):
         """
-        :param input_size: dimension of input
+        :param num_mels: number of mel filters
         :param hidden_size: dimension of hidden unit
         :param output_size: dimension of output
+        :param p: dropout probability (zero-out probability)
         """
         super(SpeechPrenet, self).__init__()
-        self.input_size = input_size
+        self.input_size = num_mels
         self.output_size = output_size
         self.hidden_size = hidden_size
         self.layer = nn.Sequential(OrderedDict([
              ('fc1', Linear(self.input_size, self.hidden_size)),
              ('relu1', nn.ReLU()),
+             ('dropout2', nn.Dropout(p)),
              ('fc2', Linear(self.hidden_size, self.output_size)),
              ('relu2', nn.ReLU()),
+             ('dropout2', nn.Dropout(p)),
         ]))
 
     def forward(self, input_):
+        """
+        :param input_: Tensor of mel-spectrogram input (input_mel),
+                       these should be of dimensions [batch, length, num_mels]
+        """
         out = self.layer(input_)
         return out
 
+
 class SpeechPostnet(nn.Module):
-    # TODO: Fill in from TTS repo :) 
-    def __init__(self):
+    """
+    PostNet for Speech Decoder copied from Transformer-TTS.
+
+    There are 5 layers of 1D convolutions as specified in Ren's
+    paper, and this convolution network aims to refine the
+    quality of the generated mel-spectrograms.
+    """
+    def __init__(self, num_mels, num_hidden, p=0.1):
+        """
+        :param num_mels: number of mel filters
+        :param num_hidden: dimension of hidden unit
+        :param p: dropout probability (zero-out probability)
+        """
         super(SpeechPostnet, self).__init__()
+        self.conv1 = Conv(in_channels=num_mels,
+                          out_channels=num_hidden,
+                          kernel_size=5,
+                          padding=4,
+                          w_init='tanh')
+        self.conv_list = nn.ModuleList([Conv(in_channels=num_hidden,
+                                             out_channels=num_hidden,
+                                             kernel_size=5,
+                                             padding=4,
+                                             w_init='tanh')
+                                        for _ in range(3)])
+        self.conv2 = Conv(in_channels=num_hidden,
+                          out_channels=num_mels,
+                          kernel_size=5,
+                          padding=4)
+
+        self.batch_norm_list = nn.ModuleList([nn.BatchNorm1d(num_hidden)
+                                                  for _ in range(3)])
+        self.pre_batchnorm = nn.BatchNorm1d(num_hidden)
+
+        self.dropout1 = nn.Dropout(p=p)
+        self.dropout_list = nn.ModuleList([nn.Dropout(p=p) for _ in range(3)])
+
+    def forward(self, input_):
+        """
+        :param input_: Tensor of mel-spectrogram output from decoder,
+                       these should be of dimensions [batch, num_mels, length]
+        """
+        # Causal Convolution (for auto-regressive)
+        input_ = self.dropout1(torch.tanh(self.pre_batchnorm(self.conv1(input_)[:, :, :-4])))
+        for batch_norm, conv, dropout in zip(self.batch_norm_list, self.conv_list, self.dropout_list):
+            input_ = dropout(torch.tanh(batch_norm(conv(input_)[:, :, :-4])))
+        input_ = self.conv2(input_)[:, :, :-4]
+        return input_
+
 
 class TextPrenet(nn.Module):
     """
     Prenet for Text Encoder copied from Transformer-TTS.
-    
+
     Essentially, maps phoneme IDs to an embedding space using
     convolutional networks. Should be the same as Ren's paper
     since it outputs an embedding of size 256 for each phoneme.
@@ -146,13 +199,16 @@ class TextPrenet(nn.Module):
         self.projection = Linear(num_hidden, num_hidden)
 
     def forward(self, input_):
-        input_ = self.embed(input_) 
-        input_ = input_.transpose(1, 2) 
-        input_ = self.dropout1(torch.relu(self.batch_norm1(self.conv1(input_)))) 
-        input_ = self.dropout2(torch.relu(self.batch_norm2(self.conv2(input_)))) 
-        input_ = self.dropout3(torch.relu(self.batch_norm3(self.conv3(input_)))) 
-        input_ = input_.transpose(1, 2) 
-        input_ = self.projection(input_) 
+        """
+        :param input_: Tensor of Phoneme IDs (text)
+        """
+        input_ = self.embed(input_)
+        input_ = input_.transpose(1, 2)
+        input_ = self.dropout1(torch.relu(self.batch_norm1(self.conv1(input_))))
+        input_ = self.dropout2(torch.relu(self.batch_norm2(self.conv2(input_))))
+        input_ = self.dropout3(torch.relu(self.batch_norm3(self.conv3(input_))))
+        input_ = input_.transpose(1, 2)
+        input_ = self.projection(input_)
         return input_
 
 class TextPostnet(nn.Module):
@@ -172,12 +228,12 @@ class TextPostnet(nn.Module):
         return self.fc2(self.dropout1(torch.relu(self.fc1(decode_out))))
 
 class TransformerEncoder(nn.Module):
-    # TODO: Fill in from TTS repo :) 
+    # TODO: Fill in from TTS repo :)
     def __init__(self):
         super(TransformerEncoder, self).__init__()
 
 class TransformerDecoder(nn.Module):
-    # TODO: Fill in from TTS repo :) 
+    # TODO: Fill in from TTS repo :)
     def __init__(self):
         super(TransformerDecoder, self).__init__()
 
@@ -188,14 +244,14 @@ class RNNEncoder(nn.Module):
         self.hidden = hidden
         self.num_layers = num_layers
         self.num_dir = 2 if bidirectional else 1
-        
+
         # TODO: expirement with something else than LSTM
-        self.rnn = nn.LSTM(d_in, hidden, num_layers=num_layers, 
+        self.rnn = nn.LSTM(d_in, hidden, num_layers=num_layers,
             bidirectional=bidirectional, batch_first=True, dropout=dropout)
-        
+
         # Consider using this?
         self.hid2out = nn.Linear(self.num_dir * hidden, d_out)
-        
+
         if self.num_dir == 2:
             self.reduce_h_W = nn.Linear(hidden * 2, hidden, bias=True)
             self.reduce_c_W = nn.Linear(hidden * 2, hidden, bias=True)
@@ -233,9 +289,9 @@ class RNNDecoder(nn.Module):
         else:
             self.input_size = d_in
 
-        self.rnn = nn.LSTM(self.input_size, hidden, num_layers=num_layers, 
+        self.rnn = nn.LSTM(self.input_size, hidden, num_layers=num_layers,
             batch_first=True, dropout=dropout)
-        
+
         # Luong attention TODO: ADD DROPOUT!?
         if self.attention:
             self.attention_layer = LuongGeneralAttention(hidden, enc_out_size)
@@ -246,14 +302,14 @@ class RNNDecoder(nn.Module):
         # TODO: Check shape here?
         if self.attention:
             # Handles num_layers > 1 by taking last layer
-            hidden_key = hidden_state[0][-1].unsqueeze(0) 
+            hidden_key = hidden_state[0][-1].unsqueeze(0)
             attn_W = self.attention_layer(hidden_key, enc_output, enc_ctxt_mask)
             decode_input = torch.cat((embed_decode, attn_W), dim=-1)
         else:
             decode_input = embed_decode
 
         output, hidden = self.rnn(decode_input, hidden_state)
-        
+
         return self.out_layer(output), hidden
 
 class LuongGeneralAttention(nn.Module):
