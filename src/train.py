@@ -179,13 +179,11 @@ def train_speech_auto(args):
             character, mel, mel_input, pos_text, pos_mel, text_len = data
             print(mel.shape)
             print(mel_input.shape)
-            character = character.to(DEVICE)
-            encoder_outputs, latent_hidden, pad_mask = model.encode(character)
-            pred = model.decode_sequence(character, latent_hidden, encoder_outputs, pad_mask)
+            mel = mel.to(DEVICE)
+            encoder_outputs, latent_hidden, pad_mask = model.encode(mel)
+            pred = model.decode_sequence(mel, latent_hidden, encoder_outputs, pad_mask)
             
-            pred_ = pred.permute(1, 2, 0)
-            char_ = character.permute(1, 0)
-            loss = F.cross_entropy(pred_, char_, ignore_index=PAD_IDX)
+            loss = F.cross_entropy(pred, mel)
             
             optimizer.zero_grad()
             loss.backward()
