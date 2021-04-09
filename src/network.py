@@ -111,12 +111,72 @@ class SpeechRNN(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
     def __init__(self, args):
         super(SpeechRNN, self).__init__()
-        self.prenet = SpeechPrenet(args.speech_in, args.hidden, args.e_in)
+        self.prenet = SpeechPrenet(args.num_mels, args.hidden, args.e_in)
         self.encoder = RNNEncoder(args.e_in, args.hidden, args.e_out, 
             dropout=args.e_p, num_layers=args.e_layers, bidirectional=bool(args.e_bi))
         self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.d_out, 
             dropout=args.d_p, num_layers=args.d_layers, attention=bool(args.d_attn))
-        self.postnet = SpeechPostnet(args.d_out, args.hidden)
+        self.postnet = SpeechPostnet(args.num_mels, args.hidden)
+    
+
+    def preprocess(self, raw_input_tensor):
+        # raw_input_tensor should be a LongTensor of size [batch_size x seq_len x 1]
+        # should already be padded as well
+        # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
+        # NOTE: I do not think this is correct for mel... but check if all are padding in num_mels
+        pad_mask = torch.all(raw_input_tensor.eq(PAD_IDX), dim=-1).float().squeeze() 
+        return self.prenet(raw_input_tensor), pad_mask
+
+    def encode(self, raw_input_tensor):
+        """
+        Returns:
+            - output: a tensor of shape [batch_size x seq_len x latent_dim], which
+                is the projected hidden state from each timestep in the sequence
+            - h_t: the (h_n, c_n) pair from the last timestep of the network.  
+                Dimension varies depending on num_layers, but should
+                be proportional to  [num_layers, batch, hidden_size]
+            - pad_mask: a tensor of shape [batch_size x seq_len] with 1s for padded 
+                indices and 0 for everything else
+        """
+        mel_features, pad_mask = self.preprocess(raw_input_tensor)
+        enc_output, hidden_state = self.encoder(mel_features)
+        return enc_output, hidden_state, pad_mask
+
+    def decode_sequence(self, target, hidden_state, enc_output, enc_ctxt_mask, teacher_ratio=1):
+        """
+        For easier training!  target is teacher forcing [batch_size x seq_len x num_mels]
+        """
+        batch_size, max_out_len = target.shape[0], target.shape[1]
+        outputs = []
+        stops = []
+        # get a all 0 frame for first timestep
+        input_ = torch.zeros((batch_size, 1, target.shape[2]), device=target.device())
+        for i in range(max_out_len):
+            dec_out, stop_pred, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
+            stops.apped(stop_pred)
+            outputs.append(dec_out)
+            if random.random() < teacher_ratio:
+                input_ = target[:, i, :].unsqueeze(1)
+            else:
+                input_ = outputs[-1]
+        return torch.stack(outputs, dim=1).squeeze(2), torch.stack(stops, dim=1).squeeze(-1)
+
+    def decode(self, input_, hidden_state, enc_output, enc_ctxt_mask):
+        """
+        NOTE: input_ should be [batch_size x 1 x num_mels] as this is autoregressive 
+            decoding (seq2seq).
+        Returns:
+            - dec_output: a tensor of shape [batch_size x 1 x num_mels]
+                + For text, dim will be #phonemes which is a distribution over 
+                    phonemes (needs to be log_softmaxed!)
+                + For speech, dim will be the ??? which is something log filter related
+            - dec_hidden: (h_n, c_n) from decoder LSTM
+        """
+        dec_output, dec_hidden = self.decoder(embed_decode, hidden_state, enc_output, enc_ctxt_mask)
+        return self.postprocess(dec_output), dec_hidden
+
+    def postprocess(self, dec_output, distrib=False):
+        return self.postnet(dec_output)
 
 class TextTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec

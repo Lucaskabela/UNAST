@@ -141,6 +141,7 @@ class SpeechPostnet(nn.Module):
 
         self.dropout1 = nn.Dropout(p=p)
         self.dropout_list = nn.ModuleList([nn.Dropout(p=p) for _ in range(3)])
+        self.stop_linear = nn.Linear(num_hidden, 1)
 
     def forward(self, input_):
         """
@@ -148,11 +149,12 @@ class SpeechPostnet(nn.Module):
                        these should be of dimensions [batch, num_mels, length]
         """
         # Causal Convolution (for auto-regressive)
+        stop_pred = self.stop_linear(input_)
         input_ = self.dropout1(torch.tanh(self.pre_batchnorm(self.conv1(input_)[:, :, :-4])))
         for batch_norm, conv, dropout in zip(self.batch_norm_list, self.conv_list, self.dropout_list):
             input_ = dropout(torch.tanh(batch_norm(conv(input_)[:, :, :-4])))
         input_ = self.conv2(input_)[:, :, :-4]
-        return input_
+        return input_, stop_pred
 
 
 class TextPrenet(nn.Module):

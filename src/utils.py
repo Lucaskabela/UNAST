@@ -25,6 +25,8 @@ def set_seed(seed):
         - seed: An integer seed for consistency in different runs
     ''' 
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
 
