@@ -15,6 +15,10 @@ PAD_IDX = 0
 SOS_IDX = 1
 EOS_IDX = 2
 
+
+def sent_lens_to_mask(lens, max_length):
+    return torch.from_numpy(np.asarray([[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] for i in range(0, lens.shape[0])]))
+
 def set_seed(seed):
     '''
     Sets torch, numpy, and random library with seed for reproducibility

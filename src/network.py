@@ -7,7 +7,7 @@ These modules are pre, encoder, a decoder, a post, and optional discriminator.
 
 import torch.nn as nn
 from module import *
-from utils import PAD_IDX, SOS_IDX,  EOS_IDX
+from utils import PAD_IDX, SOS_IDX,  EOS_IDX, sent_lens_to_mask
 import random
 
 class AutoEncoderNet(nn.Module):
@@ -160,10 +160,21 @@ class SpeechRNN(AutoEncoderNet):
             outputs.append(dec_out)
             input_ = outputs[-1]
             i += 1
+
+            # double check this!
+            stop_mask = (stop_pred > .5).logical_and(stop_lens == 0)
+            stop_lens[stop_mask] = i
             keep_gen = torch.all(stop_lens.neq(0)) and i < max_len
- 
-        stop_lens.masked_fill(stop_lens == 0, len(outputs))
-        return torch.stack(outputs, dim=1).squeeze(2), torch.stack(stops, dim=1).squeeze(-1)
+
+        # Maybe this is a bit overkil...
+        stop_lens = stop_lens.masked_fill(stop_lens == 0, len(outputs))
+        pad_mask = sent_lens_to_mask(stop_lens, len(outputs))
+
+        res, res_stop = torch.stack(outputs, dim=1).squeeze(2), torch.stack(stops, dim=1).squeeze(-1)
+        res = res.masked_fill(pad_mask, PAD_IDX)
+        res_stop = res.masked_fill(pad_mask, PAD_IDX)
+        return res, res_stop
+
     def decode_sequence(self, target, hidden_state, enc_output, enc_ctxt_mask, teacher_ratio=1):
         """
         For easier training!  target is teacher forcing [batch_size x seq_len x num_mels]
