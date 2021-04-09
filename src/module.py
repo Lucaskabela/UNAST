@@ -119,6 +119,7 @@ class SpeechPostnet(nn.Module):
         :param p: dropout probability (zero-out probability)
         """
         super(SpeechPostnet, self).__init__()
+        self.num_mels = num_mels
         self.conv1 = Conv(in_channels=num_mels,
                           out_channels=num_hidden,
                           kernel_size=5,

@@ -142,6 +142,28 @@ class SpeechRNN(AutoEncoderNet):
         enc_output, hidden_state = self.encoder(mel_features)
         return enc_output, hidden_state, pad_mask
 
+    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=1000, batch_size=1):
+
+        outputs = []
+        stops = []
+        stop_lens = torch.zeros(batch_size).to(enc_output.device())
+        
+        # get a all 0 frame for first timestep
+        input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device())
+        i = 0
+        keep_gen = torch.all(stop_lens.neq(0)) and i < max_len
+
+        while keep_gen:
+            dec_out, stop_pred, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
+            stops.apped(stop_pred)
+            # set stop_lens here!
+            outputs.append(dec_out)
+            input_ = outputs[-1]
+            i += 1
+            keep_gen = torch.all(stop_lens.neq(0)) and i < max_len
+ 
+        stop_lens.masked_fill(stop_lens == 0, len(outputs))
+        return torch.stack(outputs, dim=1).squeeze(2), torch.stack(stops, dim=1).squeeze(-1)
     def decode_sequence(self, target, hidden_state, enc_output, enc_ctxt_mask, teacher_ratio=1):
         """
         For easier training!  target is teacher forcing [batch_size x seq_len x num_mels]
