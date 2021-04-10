@@ -178,10 +178,10 @@ def train_speech_auto(args):
         for data in dataloader:
             character, mel, mel_input, pos_text, pos_mel, text_len = data
             mel_input = mel_input.to(DEVICE)
-            encoder_outputs, latent_hidden, pad_mask = model.encode(mel_input)
+            encoder_outputs, latent_hidden, pad_mask = model.encode(mel)
             pred, stop_pred = model.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
             
-            loss = F.mse_loss(pred, mel_input)
+            loss = F.mse_loss(pred, mel)
             
             optimizer.zero_grad()
             loss.backward()

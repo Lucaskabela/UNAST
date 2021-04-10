@@ -189,8 +189,8 @@ class SpeechRNN(AutoEncoderNet):
             (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             stops.append(stop_pred)
             outputs.append(dec_out)
-            if random.random() < teacher_ratio:
-                input_ = target[:, i, :].unsqueeze(1)
+            if random.random() < teacher_ratio and i + 1 < max_out_len:
+                input_ = target[:, i+1, :].unsqueeze(1)
             else:
                 input_ = outputs[-1]
         return torch.stack(outputs, dim=1).squeeze(), torch.stack(stops, dim=1).squeeze()
