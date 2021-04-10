@@ -12,7 +12,6 @@ import audio_parameters as ap
 import argparse
 import torch.nn.functional as F
 
-
 # TODO: Refactor these losses...
 def autoencoder_loss(output, target, speech=False):
     '''
@@ -47,7 +46,7 @@ def evaluate():
 def train(args):
     '''
     TODO:
-        1. Get Dataset
+        1. DONE -- Get Dataset
         2. Init models & optimizers
         3. Train, or for each epoch:
                 For each batch:
@@ -62,24 +61,53 @@ def train(args):
         TODO: Include functionality for saving, loading from save
     '''
     set_seed(args.seed)
-    dataset = get_dataset()
+    print("#### Getting Dataset ####")
+    supervised_train_dataset = get_dataset('labeled_train.csv')
+    unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
+    val_dataset = get_dataset('val.csv')
     # init models and optimizers
     model = None
     optimizer = None
 
     for epoch in range(args.epochs):
-        dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+        # Training model
+        supervised_dataloader = DataLoader(supervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+        supervised_iter = iter(supervised_dataloader)
 
-        pbar = tqdm(dataloader)
-        for i, data in enumerate(pbar):
-            pbar.set_description("Processing at epoch %d"%epoch)
+        unsupervised_dataloader = DataLoader(unsupervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
 
-            character, mel, mel_input, pos_text, pos_mel, _ = data
+        bar = tqdm(unsupervised_dataloader)
+        bar.set_description("Epoch {} Training Model".format(epoch))
 
-        for batch in dataloader:
-            # choose loss function here!
-            model.decode(model.encode(batch))
-        evaluate(model, valid_dataset)
+        # step counter for a single epoch
+        # used to determine which training task to do
+        epoch_step = 0
+
+        # We are considering one pass through the unsupervised dataset as
+        # one epoch
+        for unsupervised_batch in bar:
+            epoch_step += 1
+            if epoch_step % 3 == 0:
+                # Janky way to check to do a supervised step
+                try:
+                    supervised_batch = supervised_iter.next()
+                except StopIteration:
+                    supervised_iter = iter(DataLoader(supervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16))
+                    supervised_batch = supervised_iter.next()
+                # TODO: Do a supervised step with supervised_batch
+
+                # This enforces that we still use the unsupervised_batch in this
+                # iteration
+                epoch_step += 1
+            if epoch_step % 3 == 1:
+                # TODO: Do a denoising step with this unsupervised_batch
+                pass
+            if epoch_step % 3 == 2:
+                # TODO: Do a unsupervised cross modal step
+                # with this unsupervised_batch
+                pass
+
+        # TODO: add the discriminator loop here
 
     return model
 
