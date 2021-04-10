@@ -204,79 +204,23 @@ def train_speech_auto(args):
         #     model.save_model()
     return model
 
-def train(args):
-    '''
-    TODO:
-        1. Get Dataset
-        2. Init models & optimizers
-        3. Train, or for each epoch:
-                For each batch:
-                - Choose which loss function
-                - Freeze appropriate networks
-                - Run through networks
-                - Get loss
-                - Update
-                Metrics (like validation, etc)
-        4. Return trained text & speech for validation, metric measurement
-
-        TODO: Include functionality for saving, loading from save
-    '''
-    set_seed(args.seed)
-
-    # TODO: Replace get_dataset() with getting train/valid/test split
-    dataset = get_dataset()
-    #NOTE: Subset for prototyping
-    # dataset = torch.utils.data.Subset(dataset, range(1000))
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
-    train_log, valid_log = None, None
-    model = TextRNN(args).to(DEVICE)
-    print("Sent model to", DEVICE)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,  weight_decay=1e-5)
-
-    global_step = 0
-
-    for epoch in range(args.epochs):
-        losses = []
-        for data in dataloader:
-            character, mel, mel_input, pos_text, pos_mel, text_len = data
-            character = character.to(DEVICE)
-            encoder_outputs, latent_hidden, pad_mask = model.encode(character)
-            pred = model.decode_sequence(character, latent_hidden, encoder_outputs, pad_mask)
-            
-            pred_ = pred.permute(1, 2, 0)
-            char_ = character.permute(1, 0)
-            loss = F.cross_entropy(pred_, char_, ignore_index=PAD_IDX)
-            
-            optimizer.zero_grad()
-            loss.backward()
-            if args.grad_clip > 0.0:
-                nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-            optimizer.step()
-            losses.append(loss.detach().cpu().item())
-            if train_log is not None:
-                train_log.add_scalar("loss", losses[-1], global_step)
-            global_step += 1
-
-        # evaluate(model, valid_dataset)
-        avg_l = np.mean(losses)
-        print("epoch %-3d \t loss = %0.3f \t" % (epoch, avg_l))
-        # if validation < best:
-        # TODO: Add model (and optimizer) saving for reloading training
-        #     print("Saving model!")
-        #     best = validation
-        #     model.save_model()
-    return model
-
+   
 def train(args):
     set_seed(args.seed)
+
     print("#### Getting Dataset ####")
     supervised_train_dataset = get_dataset('labeled_train.csv')
     unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
     val_dataset = get_dataset('val.csv')
     full_train_dataset = get_dataset('full_train.csv')
+
     # init models and optimizers
-    model = None
-    optimizer = None
+    text_m = TextRNN(args).to(DEVICE)  
+    speech_m = SpeechRNN(args).to(DEVICE)
+
+    # TODO: Combine these all into one with another model ontop of this
+    text_opt = torch.optim.Adam(text_m.parameters(), lr=args.lr,  weight_decay=1e-5)
+    speech_opt = torch.optim.Adam(speech_m.parameters(), lr=args.lr, weight_decay=1e-5)
 
     for epoch in range(args.epochs):
         # Training model
@@ -303,18 +247,61 @@ def train(args):
                 except StopIteration:
                     supervised_iter = iter(DataLoader(supervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16))
                     supervised_batch = supervised_iter.next()
-                # TODO: Do a supervised step with supervised_batch
+                
+                # Do a supervised step with supervised_batch
+                # TODO: Write a function for this (step), and for batch to device!
+                character, mel, mel_input, pos_text, pos_mel, text_len = supervised_batch
+                t_e_o, t_hid, t_pad_mask = text_m.encode(character)
+                s_e_o, s_hid, s_pad_mask = speech_m.encode(mel)
+
+                pred, stop_pred = speech_m.decode_sequence(mel_input, t_hid, t_e_o, t_pad_mask)
+                text_pred = text_m.decode_sequence(character, s_hid, s_e_o, s_pad_mask)
+
+                # TODO: Add EOS loss here
+                tts_loss = F.mse_loss(pred, mel.detach())
+                pred_ = text_pred.permute(1, 2, 0)
+                char_ = character.detach().permute(1, 0)
+                asr_loss = F.cross_entropy(pred_, char_, ignore_index=PAD_IDX)
+
+                # TODO: Take optimizer steps here... how?
+
 
                 # This enforces that we still use the unsupervised_batch in this
                 # iteration
                 epoch_step += 1
             if epoch_step % 3 == 1:
-                # TODO: Do a denoising step with this unsupervised_batch
-                pass
+                # TODO: Write noising function?  What does paper use?
+                character, mel, mel_input, pos_text, pos_mel, text_len = unsupervised_batch
+                t_e_o, t_hid, t_pad_mask = text_m.encode(character)
+                s_e_o, s_hid, s_pad_mask = speech_m.encode(mel)
+
+                pred, stop_pred = speech_m.decode_sequence(mel_input, s_hid, s_e_o, s_pad_mask)
+                text_pred = text_m.decode_sequence(character, t_hid, t_e_o, t_pad_mask)
+                s_ae_loss = F.mse_loss(pred, mel.detach())
+                pred_ = text_pred.permute(1, 2, 0)
+                char_ = character.detach().permute(1, 0)
+                t_ae_loss = F.cross_entropy(pred_, char_, ignore_index=PAD_IDX)
+                
+                # TODO: Take optimizer steps here... how?
             if epoch_step % 3 == 2:
-                # TODO: Do a unsupervised cross modal step
-                # with this unsupervised_batch
-                pass
+                character, mel, mel_input, pos_text, pos_mel, text_len = unsupervised_batch
+                t_e_o, t_hid, t_pad_mask = text_m.encode(character)
+                s_e_o, s_hid, s_pad_mask = speech_m.encode(mel)
+
+                pred, stop_pred = speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
+                text_pred = text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
+
+                cm_t_e_o, cm_t_hid, cm_t_pad_mask = text_m.encode(text_pred)
+                cm_s_e_o, cm_s_hid, cm_s_pad_mask = speech_m.encode(pred)
+                pred, stop_pred = speech_m.decode_sequence(mel_input, cm_t_hid, cm_t_e_o, cm_t_pad_mask)
+                text_pred = text_m.decode_sequence(character, cm_s_hid, cm_s_e_o, cm_s_pad_mask)
+
+                s_cm_loss = F.mse_loss(pred, mel.detach())
+                pred_ = text_pred.permute(1, 2, 0)
+                char_ = character.detach().permute(1, 0)
+                t_cm_loss = F.cross_entropy(pred_, char_, ignore_index=PAD_IDX)
+                
+                # TODO: take step of optimizer
 
         if args.train_discriminator:
             # Train discriminator
