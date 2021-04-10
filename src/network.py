@@ -113,9 +113,9 @@ class SpeechRNN(AutoEncoderNet):
         super(SpeechRNN, self).__init__()
         self.prenet = SpeechPrenet(args.num_mels, args.hidden, args.e_in)
         self.encoder = RNNEncoder(args.e_in, args.hidden, args.e_out, 
-            dropout=args.e_p, num_layers=args.e_layers, bidirectional=bool(args.e_bi))
+            dropout=args.e_p, num_layers=args.e_layers, bidirectional=args.e_bi)
         self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.num_mels, 
-            dropout=args.d_p, num_layers=args.d_layers, attention=bool(args.d_attn))
+            dropout=args.d_p, num_layers=args.d_layers, attention=args.d_attn)
         self.postnet = SpeechPostnet(args.num_mels, args.hidden)
     
 
@@ -225,9 +225,9 @@ class TextRNN(AutoEncoderNet):
         super(TextRNN, self).__init__()
         self.prenet = TextPrenet(args.embed_dim, args.e_in)
         self.encoder = RNNEncoder(args.e_in, args.hidden, args.e_out, 
-            dropout=args.e_p, num_layers=args.e_layers, bidirectional=bool(args.e_bi))
+            dropout=args.e_p, num_layers=args.e_layers, bidirectional=args.e_bi)
         self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.d_out, 
-            dropout=args.d_p, num_layers=args.d_layers, attention=bool(args.d_attn))
+            dropout=args.d_p, num_layers=args.d_layers, attention=args.d_attn)
         self.postnet = TextPostnet(args.d_out, args.hidden)
 
     def preprocess(self, raw_input_tensor):

@@ -14,11 +14,12 @@
     "e_out": 256,
     "e_p": 0.5,
     "e_layers": 1,
-    "e_bi": 0,
+    "e_bi": false,
     "d_in": 256,
     "d_out": 128,
     "d_p": 0.3,
     "d_layers": 1,
-    "d_attn": 0,
+    "d_attn": false,
     "grad_clip": 1.0
+    "train_discriminator": false
 }

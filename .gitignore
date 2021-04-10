@@ -1,5 +1,6 @@
 # Dataset files
 src/data/LJSpeech-1.1
+src/data/LJSpeech-1.1-testing
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
