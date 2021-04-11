@@ -48,7 +48,7 @@ def eval_speech_auto(target, hidden_state, enc_output, enc_ctxt_mask, text_model
 def evaluate(text_model, speech_model, valid_dataset):
     """
         Expect validation set to have paired speech & text!
-        We evaluate on 4 metrics:  autoencoder text loss, autoencdoer speech loss,
+        We evaluate on 4 metrics:  autoencoder text loss, autoencoder speech loss,
             ASR (evaluated by PER), and TTS (evaluated by MSE). 
     """
     text_model.eval()
@@ -114,10 +114,8 @@ def train_text_auto(args):
         for data in dataloader:
             character, mel, mel_input, pos_text, pos_mel, text_len = data
             character = character.to(DEVICE)
-            encoder_outputs, latent_hidden, pad_mask = model.encode(character)
-            pred = model.decode_sequence(character, latent_hidden, encoder_outputs, pad_mask)
+            pred = model.forward(character).permute(1, 2, 0)
             
-            pred_ = pred.permute(1, 2, 0)
             char_ = character.permute(1, 0)
             loss = F.cross_entropy(pred_, char_, ignore_index=PAD_IDX)
             
@@ -177,9 +175,9 @@ def train_speech_auto(args):
         losses = []
         for data in dataloader:
             character, mel, mel_input, pos_text, pos_mel, text_len = data
-            mel_input = mel_input.to(DEVICE)
-            encoder_outputs, latent_hidden, pad_mask = model.encode(mel)
-            pred, stop_pred = model.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
+            mel_input, mel = mel_input.to(DEVICE), mel.to(DEVICE)
+            pred, stop_pred = model.forward(mel, mel_input)
+
             
             loss = F.mse_loss(pred, mel)
             
@@ -207,7 +205,6 @@ def train_speech_auto(args):
    
 def train(args):
     set_seed(args.seed)
-
     print("#### Getting Dataset ####")
     supervised_train_dataset = get_dataset('labeled_train.csv')
     unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
