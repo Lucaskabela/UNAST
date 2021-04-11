@@ -156,7 +156,7 @@ class SpeechRNN(AutoEncoderNet):
 
         while keep_gen:
             dec_out, stop_pred, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
-            stops.apped(stop_pred)
+            stops.append(stop_pred)
             # set stop_lens here!
             outputs.append(dec_out)
             input_ = outputs[-1]
@@ -213,6 +213,11 @@ class SpeechRNN(AutoEncoderNet):
     def postprocess(self, dec_output, distrib=False):
         return self.postnet(dec_output)
 
+    def forward(self, input_, mel_input):
+        encoder_outputs, latent_hidden, pad_mask = model.encode(input_)
+        pred, stop_pred = model.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
+        return pred
+        
 class TextTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
     def __init__(self, args):
@@ -323,3 +328,8 @@ class TextRNN(AutoEncoderNet):
         res = torch.stack(outputs, dim=1).squeeze(2)
         res = res.masked_fill(pad_mask, PAD_IDX)
         return res
+
+    def forward(self, input_):
+        encoder_outputs, latent_hidden, pad_mask = model.encode(input_)
+        pred = model.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask)
+        return pred

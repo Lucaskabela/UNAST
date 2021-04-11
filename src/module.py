@@ -147,7 +147,8 @@ class SpeechPostnet(nn.Module):
     def forward(self, input_):
         """
         :param input_: Tensor of mel-spectrogram output from decoder,
-                       these should be of dimensions [batch, num_mels, length]
+                       these should be of dimensions [batch, length, num_mels]
+                       as we change the shape ourselves
         """
         # Causal Convolution (for auto-regressive)
         stop_pred = self.stop_linear(input_)
