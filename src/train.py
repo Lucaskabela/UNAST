@@ -179,8 +179,17 @@ def train_speech_auto(args):
             pred, stop_pred = model.forward(mel, mel_input)
 
             
-            loss = F.mse_loss(pred, mel)
+            pred_loss = F.mse_loss(pred, mel)
+            # Should be [batch_size x seq_length] for stop 
+
+            # TODO: return actual lengths, not just computed off padding
+            # currently, find first nonzero (so pad_idx) in pos_mel, or set to length
+            end_mask_max, end_mask_idx = torch.max((pos_mel == PAD_IDX), dim=1)
+            end_mask_idx[end_mask_max == 0] = pos_mel.shape[1] - 1
+            stop_label = F.one_hot(end_mask_idx, pos_mel.shape[1]).float()
+            stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
             
+            loss = pred_loss + stop_loss
             optimizer.zero_grad()
             loss.backward()
             if args.grad_clip > 0.0:

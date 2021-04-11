@@ -216,7 +216,7 @@ class SpeechRNN(AutoEncoderNet):
     def forward(self, input_, mel_input):
         encoder_outputs, latent_hidden, pad_mask = self.encode(input_)
         pred, stop_pred = self.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
-        return pred
+        return pred, stop_pred
         
 class TextTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
