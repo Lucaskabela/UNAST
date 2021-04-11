@@ -85,6 +85,47 @@ class AutoEncoderNet(nn.Module):
         raise Exception("Please use a subclass for text or speech")
 
 
+class UNAST(nn.Module):
+    def __init__(self, text_m, speech_m, discriminator=None):
+        self.text_m = text_m
+        self.speech_m = speech_m
+        self.discriminator = discriminator
+
+    def text_ae(self, character_input):
+        return self.text_m.forward(character_input)
+    
+    def speech_ae(self, mel, mel_input):
+        return self.speech_m.forward(mel, mel_input)
+
+    def cm_text_in(self, character_input):
+        t_e_o, t_hid, t_pad_mask = text_m.encode(character_input)
+        pred, stop_pred = speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
+        cm_s_e_o, cm_s_hid, cm_s_pad_mask = speech_m.encode(pred)
+        text_pred = text_m.decode_sequence(character, cm_s_hid, cm_s_e_o, cm_s_pad_mask)
+        return text_pred
+
+    def cm_speech_in(self, mel, mel_input):
+        s_e_o, s_hid, s_pad_mask = speech_m.encode(mel)
+        text_pred = text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
+        cm_t_e_o, cm_t_hid, cm_t_pad_mask = text_m.encode(text_pred)
+        pred, stop_pred = speech_m.decode_sequence(mel_input, cm_t_hid, cm_t_e_o, cm_t_pad_mask)
+        return pred, stop_pred
+    
+    def tts(self, character, mel_input, infer=False):
+        t_e_o, t_hid, t_pad_mask = text_m.encode(character)
+        if not infer:
+            pred, stop_pred = speech_m.decode_sequence(mel_input, t_hid, t_e_o, t_pad_mask)
+        else:
+            pred, stop_pred = speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
+        return pred, stop_pred
+
+    def asr(self, character, mel, infer=False):
+        s_e_o, s_hid, s_pad_mask = speech_m.encode(mel)
+        if not infer:
+            text_pred = text_m.decode_sequence(character, s_hid, s_e_o, s_pad_mask)
+        else:
+            text_pred = text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
+        return text_pred
 
 class Discriminator(nn.Module):
     # TODO: Fill in with linear layers :) 
