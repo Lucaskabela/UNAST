@@ -214,8 +214,8 @@ class SpeechRNN(AutoEncoderNet):
         return self.postnet(dec_output)
 
     def forward(self, input_, mel_input):
-        encoder_outputs, latent_hidden, pad_mask = model.encode(input_)
-        pred, stop_pred = model.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
+        encoder_outputs, latent_hidden, pad_mask = self.encode(input_)
+        pred, stop_pred = self.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
         return pred
         
 class TextTransformer(AutoEncoderNet):
@@ -330,6 +330,6 @@ class TextRNN(AutoEncoderNet):
         return res
 
     def forward(self, input_):
-        encoder_outputs, latent_hidden, pad_mask = model.encode(input_)
-        pred = model.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask)
+        encoder_outputs, latent_hidden, pad_mask = self.encode(input_)
+        pred = self.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask)
         return pred

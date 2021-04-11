@@ -20,6 +20,6 @@
     "d_p": 0.3,
     "d_layers": 1,
     "d_attn": false,
-    "grad_clip": 1.0
+    "grad_clip": 1.0,
     "train_discriminator": false
 }
