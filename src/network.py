@@ -7,7 +7,7 @@ These modules are pre, encoder, a decoder, a post, and optional discriminator.
 
 import torch.nn as nn
 from module import *
-from utils import PAD_IDX, SOS_IDX,  EOS_IDX, sent_lens_to_mask
+from utils import PAD_IDX, SOS_IDX,  EOS_IDX, sent_lens_to_mask, noise_fn
 import random
 
 class AutoEncoderNet(nn.Module):
@@ -213,7 +213,9 @@ class SpeechRNN(AutoEncoderNet):
     def postprocess(self, dec_output, distrib=False):
         return self.postnet(dec_output)
 
-    def forward(self, input_, mel_input):
+    def forward(self, input_, mel_input, noise_in=False):
+        if noise_in:
+            input_ = noise_fn(input_)
         encoder_outputs, latent_hidden, pad_mask = self.encode(input_)
         pred, stop_pred = self.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
         return pred, stop_pred
@@ -330,6 +332,11 @@ class TextRNN(AutoEncoderNet):
         return res
 
     def forward(self, input_):
-        encoder_outputs, latent_hidden, pad_mask = self.encode(input_)
+        if noise_in:
+            input_masked = noise_fn(input_)
+            print(input_)
+        else:
+            input_masked = input_
+        encoder_outputs, latent_hidden, pad_mask = self.encode(input_masked)
         pred = self.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask)
         return pred
