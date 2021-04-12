@@ -10,11 +10,23 @@ import json
 import sys
 import torch.utils.tensorboard as tb
 import shutil
+from jiwer import wer
 
 PAD_IDX = 0
 SOS_IDX = 1
 EOS_IDX = 2
 
+
+def per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengths):
+    # Given two tensors of size [batch_size x sent_len], compute the PER!
+    # lengths should be a tensor of [batch_size], used for ignoring padding
+
+    gt_sents = []
+    hyp_sents = []
+    for b in range(ground_truth.shape[0]):
+        gt_sents.append(' '.join(ground_truth[b][:].tolist()[:ground_truth_lengths[b]]))
+        hyp_sents.append(' '.join(hypothesis[b][:].tolist()[:hypothesis_lengths[b]]))
+    return wer(gt_sents, hyp_sents)
 
 def sent_lens_to_mask(lens, max_length):
     return torch.from_numpy(np.asarray([[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] for i in range(0, lens.shape[0])]))
