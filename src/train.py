@@ -145,14 +145,21 @@ def train(args):
     full_train_dataset = get_dataset('full_train.csv')
 
     # init models and optimizers
-    text_m = TextRNN(args).to(DEVICE)  
-    speech_m = SpeechRNN(args).to(DEVICE)
-    discriminator = None
-    model = UNAST(text_m, speech_m, discriminator)
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,  weight_decay=1e-5)
-    best = 100
+    if args.load_path is None:
+        text_m = TextRNN(args).to(DEVICE)  
+        speech_m = SpeechRNN(args).to(DEVICE)
+        discriminator = None
+        model = UNAST(text_m, speech_m, discriminator)
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,  weight_decay=1e-5)
+        s_epoch, best = 0, 100
+    else:
+        model = UNAST(None, None, None)
+        optimizer = toch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+        data = load_ckp(args.load_path, model, optimizer)
+        s_epoch, best, model, optimizer = data
+        s_epoch = s_epoch + 1
 
-    for epoch in range(args.epochs):
+    for epoch in range(s_epoch, args.epochs):
 
         # Training model
         supervised_dataloader = DataLoader(supervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
@@ -241,11 +248,11 @@ def train(args):
         per, eval_losses = evaluate(model, valid_dataset)
         log_loss_metrics(eval_losses, epoch, eval=True)
         if per < best:
-            # TODO: Add reloading from args before training
             print("Saving model!")
             best = per
             save_ckp(epoch, per, model, optimizer, True, args.checkpoint_path)
-    return model.eval()
+    model.eval()
+    return model
 
 def log_loss_metrics(losses, epoch, eval=False):
 
