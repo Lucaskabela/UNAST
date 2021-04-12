@@ -5,7 +5,7 @@ Contains the code for training the encoder/decoders, including:
     - Denoising loss
     - Discriminator loss
 '''
-from utils import set_seed, parse_with_config, PAD_IDX, init_device
+from utils import set_seed, parse_with_config, PAD_IDX, init_device, compute_per
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
 from network import TextRNN, SpeechRNN
@@ -16,44 +16,85 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torch
 import numpy as np
+from collections import defaultdict
 
 DEVICE = init_device()
 
+def text_loss(gold_char, pred_char):
+    return F.cross_entropy(text_pred, char_gold, ignore_index=PAD_IDX)
+
+
+def speech_loss(gold_mel, pos_mel, pred_mel, stop_pred):
+
+    # Should be [batch_size x seq_length] for stop 
+    pred_loss = F.mse_loss(pred_mel, gold_mel)
+
+    # TODO: return actual lengths, not just computed off padding
+    # currently, find first nonzero (so pad_idx) in pos_mel, or set to length
+    end_mask_max, end_mask_idx = torch.max((pos_mel == PAD_IDX), dim=1)
+    end_mask_idx[end_mask_max == 0] = pos_mel.shape[1] - 1
+    stop_label = F.one_hot(end_mask_idx, pos_mel.shape[1]).float()
+    stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
 
 def discriminator_loss(output, target):
     return F.cross_entropy(output, target)
 
 
-def evaluate(text_model, speech_model, valid_dataset):
+def evaluate(model, valid_dataset):
     """
         Expect validation set to have paired speech & text!
-        We evaluate on 4 metrics:  autoencoder text loss, autoencoder speech loss,
-            ASR (evaluated by PER), and TTS (evaluated by MSE). 
+        Primary evaluation is PER - can gauge training by the other losses
+        We return on 6 other metrics:  autoencoder text loss, autoencoder speech loss,
+            ASR loss, and TTS loss, cross model text and cross model speech loss. 
     """
-    text_model.eval()
-    speech_model.eval()
+    model.eval()
     with torch.no_grad():
-        per, ae_text_loss, ae_speech_loss, asr_loss, tts_loss = 0, 0, 0, 0
-        n_iters = 0
-        for data in valid_dataset:
-            character, mel, mel_input, pos_text, pos_mel, text_len = data
-            character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
-            mel_gold, char_gold = mel, character.permute(1, 0)
+        losses = defaultdict(list)
+        per, n_iters = 0, 0
+        
+        for batch in valid_dataset:
+            character, mel, mel_input, pos_text, pos_mel, text_len = batch
 
+            t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
+            losses['t_ae'].append(t_ae_loss.detach().cpu().item())
+            losses['s_ae'].append(s_ae_loss.detach().cpu().item())
+
+            asr_loss, tts_loss = supervised_step(model, batch)
+            losses['asr_'].append(asr_loss.detach().cpu().item())
+            losses['tts_'].append(tts_loss.detach().cpu().item())
+
+            t_cm_loss, s_cm_loss = crossmodel_step(model, batch)
+            losses['s_cm'].append(s_cm_loss.detach().cpu().item())
+            losses['t_cm'].append(t_cm_loss.detach().cpu().item())
+
+            text_pred = model.asr(None, mel.to(DEVICE), infer=True).squeeze()
+            len_mask_max, len_mask_idx = torch.max((text_pred == PAD_IDX), dim=1)
+            len_mask_idx[end_mask_max == 0] = text_pred.shape[1] - 1
+            print("Lengths", len_mask_idx.shape)
+            per += compute_per(character.to(DEVICE), text_pred, text_len.to(DEVICE), len_mask_idx)
             n_iters += 1
 
-    text_model.train()
-    speech_model.train()
-    ae_text_loss, ae_speech_loss = ae_text_loss / n_iters, ae_speech_loss / n_iters
-    asr_loss, tts_err = asr_loss / n_iters, tts_err / n_iters
-    return per, (ae_text_loss, ae_speech_loss, asr_loss, tts_err)
-   
+    model.train()
 
-def autoencoder_step(batch):
+    return per/n_iters, losses
+
+
+def optimizer_step(loss, model, optimizer, args):
+
+    # Take a optimizer step!
+    optimizer.zero_grad()
+    loss.backward()
+    if args.grad_clip > 0.0:
+        nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+    optimizer.step()
+    return loss.detach().cpu().item()
+
+
+def autoencoder_step(model, batch):
     """
     Compute and return the loss for autoencoders
     """
-    character, mel, mel_input, pos_text, pos_mel, text_len = unsupervised_batch
+    character, mel, mel_input, pos_text, pos_mel, text_len = batch
     character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
     mel_gold, char_gold = mel.detach(), character.detach().permute(1, 0)
 
@@ -61,13 +102,42 @@ def autoencoder_step(batch):
     pred, stop_pred = model.speech_ae(mel, mel_input)
     
     # TODO: add end length loss
-    s_ae_loss = F.mse_loss(pred, mel_gold)
-    t_ae_loss = F.cross_entropy(text_pred, char_gold, ignore_index=PAD_IDX)
-    loss = t_ae_loss + s_ae_loss
+    s_ae_loss = speech_loss(mel_gold, pos_mel, pred, stop_pred)
+    t_ae_loss = text_loss(gold_char, pred_char)
+    return t_ae_loss, s_ae_loss
 
+
+def supervised_step(model, batch):
+    character, mel, mel_input, pos_text, pos_mel, text_len = batch
+    character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
+    mel_gold, char_gold = mel.detach(), character.detach().permute(1, 0)
+
+    pred, stop_pred = model.tts(character, mel_input)
+    text_pred = model.asr(character, mel).permute(1, 2, 0)
+    
+    tts_loss = speech_loss(mel_gold, pos_mel, pred, stop_pred)
+    asr_loss = text_loss(gold_char, pred_char)
+    return asr_loss, tts_loss
+
+
+def crossmodel_step(model, batch):
+    #NOTE: not sure if this will fail bc multiple grads on the model...
+    character, mel, mel_input, pos_text, pos_mel, text_len = unsupervised_batch
+    character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
+    mel_gold, char_gold = mel.detach(), character.detach().permute(1, 0)
+
+    # Do speech!
+    pred, stop_pred = model.cm_speech_in(mel, mel_input)
+    s_cm_loss = speech_loss(mel_gold, pos_mel, pred, stop_pred)
+
+    # Now do text!
+    text_pred = model.cm_text_in(character).permute(1, 2, 0)
+    t_cm_loss = text_loss(gold_char, pred_char)
+    return t_cm_loss, s_cm_loss
 
 def train(args):
     set_seed(args.seed)
+
     print("#### Getting Dataset ####")
     supervised_train_dataset = get_dataset('labeled_train.csv')
     unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
@@ -79,11 +149,11 @@ def train(args):
     speech_m = SpeechRNN(args).to(DEVICE)
     discriminator = None
     model = UNAST(text_m, speech_m, discriminator)
-
-    # TODO: Combine these all into one with another model ontop of this
-    opt = torch.optim.Adam(model.parameters(), lr=args.lr,  weight_decay=1e-5)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,  weight_decay=1e-5)
+    best = 100
 
     for epoch in range(args.epochs):
+
         # Training model
         supervised_dataloader = DataLoader(supervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
         supervised_iter = iter(supervised_dataloader)
@@ -96,7 +166,7 @@ def train(args):
         # step counter for a single epoch
         # used to determine which training task to do
         epoch_step = 0
-        losses = []
+        losses = defaultdict(list)
         # We are considering one pass through the unsupervised dataset as
         # one epoch
         for unsupervised_batch in bar:
@@ -108,54 +178,36 @@ def train(args):
                 except StopIteration:
                     supervised_iter = iter(DataLoader(supervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16))
                     supervised_batch = supervised_iter.next()
-                
-                # Do a supervised step with supervised_batch
-                character, mel, mel_input, pos_text, pos_mel, text_len = supervised_batch
-                character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
-                mel_gold, char_gold = mel.detach(), character.detach().permute(1, 0)
-
-                pred, stop_pred = model.tts(character, mel_input)
-                text_pred = model.asr(character, mel).permute(1, 2, 0)
-                
-                # TODO: Add EOS loss here
-                tts_loss = F.mse_loss(pred, mel_gold)
-                asr_loss = F.cross_entropy(text_pred, char_gold, ignore_index=PAD_IDX)
+            
+                asr_loss, tts_loss = supervised_step(model, supervised_batch)
                 loss = tts_loss + asr_loss
 
-                # Take a optimizer step!
-                optimizer.zero_grad()
-                loss.backward()
-                if args.grad_clip > 0.0:
-                    nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                optimizer.step()
-                losses.append(loss.detach().cpu().item())
+                # Take a optimizer and append losses here!
+                optimizer_step(loss, model, optimizer, args)
+
+                # Log losses
+                losses['asr_'].append(asr_loss.detach().cpu().item())
+                losses['tts_'].append(tts_loss.detach().cpu().item())
 
                 # This enforces that we still use the unsupervised_batch in this
                 # iteration
                 epoch_step += 1
 
             if epoch_step % 3 == 1:
-                character, mel, mel_input, pos_text, pos_mel, text_len = unsupervised_batch
-                character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
-                mel_gold, char_gold = mel.detach(), character.detach().permute(1, 0)
 
-                text_pred = model.text_ae(character).permute(1, 2, 0)
-                pred, stop_pred = model.speech_ae(mel, mel_input)
-                
-                # TODO: add end length loss
-                s_ae_loss = F.mse_loss(pred, mel_gold)
-                t_ae_loss = F.cross_entropy(text_pred, char_gold, ignore_index=PAD_IDX)
+                t_ae_loss, s_ae_loss = autoencoder_step(model, unsupervised_batch)
                 loss = t_ae_loss + s_ae_loss
 
                 # Take a optimizer step!
-                optimizer.zero_grad()
-                loss.backward()
-                if args.grad_clip > 0.0:
-                    nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                optimizer.step()
-                losses.append(loss.detach().cpu().item())
+                optimizer_step(loss, model, optimizer, args)
+
+                # Log losses
+                losses['t_ae'].append(t_ae_loss.detach().cpu().item())
+                losses['s_ae'].append(s_ae_loss.detach().cpu().item())
 
             if epoch_step % 3 == 2:
+
+                # NOTE: do not use cross_model here bc need to take optimizer step inbetween
                 character, mel, mel_input, pos_text, pos_mel, text_len = unsupervised_batch
                 character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
                 mel_gold, char_gold = mel.detach(), character.detach().permute(1, 0)
@@ -163,26 +215,16 @@ def train(args):
                 # Do speech!
                 pred, stop_pred = model.cm_speech_in(mel, mel_input)
                 s_cm_loss = F.mse_loss(pred, mel_gold)
-
-                # Take a optimizer step!
-                optimizer.zero_grad()
-                s_cm_loss.backward()
-                if args.grad_clip > 0.0:
-                    nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                optimizer.step()
-                losses.append(s_cm_loss.detach().cpu().item())
+                optimizer_step(s_cm_loss, model, optimizer, args)
 
                 # Now do text!
                 text_pred = model.cm_text_in(character).permute(1, 2, 0)
                 t_cm_loss = F.cross_entropy(text_pred, char_gold, ignore_index=PAD_IDX)
+                optimizer_step(t_cm_loss, model, optimizer, args)
 
-                # Take a optimizer step!
-                optimizer.zero_grad()
-                s_cm_loss.backward()
-                if args.grad_clip > 0.0:
-                    nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-                optimizer.step()
-                losses.append(s_cm_loss.detach().cpu().item())
+                # Log losses
+                losses['s_cm'].append(s_cm_loss.detach().cpu().item())
+                losses['t_cm'].append(t_cm_loss.detach().cpu().item())
 
         if args.train_discriminator:
             # Train discriminator
@@ -195,15 +237,27 @@ def train(args):
                 # TODO: Train discriminator over the whole train dataset
                 pass
 
-        avg_l = np.mean(losses)
-        print("epoch %-3d \t loss = %0.3f \t" % (epoch, avg_l))
-        # if validation < best:
-        # TODO: Add model (and optimizer) saving for reloading training
-        #     print("Saving model!")
-        #     best = validation
-        #     model.save_model()
-    return model
+        log_loss_metrics(losses, epoch)
+        per, eval_losses = evaluate(model, valid_dataset)
+        log_loss_metrics(eval_losses, epoch, eval=True)
+        if per < best:
+            # TODO: Add reloading from args before training
+            print("Saving model!")
+            best = per
+            save_ckp(epoch, per, model, optimizer, True, args.checkpoint_path)
+    return model.eval()
 
+def log_loss_metrics(losses, epoch, eval=False):
+
+    kind = "Train"
+    if eval:
+        kind = "Eval_"
+
+    out_str = "{} epoch {:-3d} \t".format(kind, epoch)
+    for key_, loss in enumerate(losses):
+        out_str += "{} loss =  {:0.3f} \t".format(key, np.avg(loss))
+    print(out_str)
+    # TODO: Add tensorboard logging
 
 def train_text_auto(args):
     '''
@@ -343,4 +397,4 @@ if __name__ == "__main__":
     parser.add_argument('--config', help='JSON config files')
     # TODO: clean up the parser/initialization of models
     args = parse_with_config(parser)
-    train_text_auto(args)
+    train(args)

@@ -17,7 +17,7 @@ SOS_IDX = 1
 EOS_IDX = 2
 
 
-def per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengths):
+def compute_per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengths):
     # Given two tensors of size [batch_size x sent_len], compute the PER!
     # lengths should be a tensor of [batch_size], used for ignoring padding
 
