@@ -11,6 +11,7 @@ from  data import cmudict
 
 _pad        = '_'
 _eos        = '~'
+_sos        = '-'
 _space = ' '
 # phonemes gotten from the cmu dict / eng-to-ipa package
 _phonemes = ['ˈ', 'a', 'b', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'r', 's', 't', 'u', 'v', 'w', 'z', 'æ', 'ð', 'ŋ', 'ɑ', 'ɔ', 'ə', 'ɛ', 'ɪ', 'ʃ', 'ʊ', 'ʒ', 'ʤ', 'ʧ', 'θ']
@@ -22,7 +23,7 @@ _missing_chars = ['c', 'q', 'x', 'y']
 _special_char = '*'
 
 # Export all symbols:
-symbols = [_pad, _eos, _space, _special_char] + _phonemes + _missing_chars
+symbols = [_pad, _sos, _eos, _space, _special_char] + _phonemes + _missing_chars
 
 
 if __name__ == '__main__':

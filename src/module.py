@@ -119,6 +119,7 @@ class SpeechPostnet(nn.Module):
         :param p: dropout probability (zero-out probability)
         """
         super(SpeechPostnet, self).__init__()
+        self.num_mels = num_mels
         self.conv1 = Conv(in_channels=num_mels,
                           out_channels=num_hidden,
                           kernel_size=5,
@@ -141,18 +142,22 @@ class SpeechPostnet(nn.Module):
 
         self.dropout1 = nn.Dropout(p=p)
         self.dropout_list = nn.ModuleList([nn.Dropout(p=p) for _ in range(3)])
+        self.stop_linear = nn.Linear(num_mels, 1)
 
     def forward(self, input_):
         """
         :param input_: Tensor of mel-spectrogram output from decoder,
-                       these should be of dimensions [batch, num_mels, length]
+                       these should be of dimensions [batch, length, num_mels]
+                       as we change the shape ourselves
         """
         # Causal Convolution (for auto-regressive)
+        stop_pred = self.stop_linear(input_)
+        input_ = input_.permute(0, 2, 1)
         input_ = self.dropout1(torch.tanh(self.pre_batchnorm(self.conv1(input_)[:, :, :-4])))
         for batch_norm, conv, dropout in zip(self.batch_norm_list, self.conv_list, self.dropout_list):
             input_ = dropout(torch.tanh(batch_norm(conv(input_)[:, :, :-4])))
         input_ = self.conv2(input_)[:, :, :-4]
-        return input_
+        return input_, stop_pred
 
 
 class TextPrenet(nn.Module):
@@ -212,11 +217,20 @@ class TextPrenet(nn.Module):
         return input_
 
 class TextPostnet(nn.Module):
-    # TODO: Fill in from TTS repo :)
-    def __init__(self):
-        super(TextPostnet, self).__init__()
+    """
 
-# TODO: Consider adding Encoder/Decoder base class here
+    """
+    def __init__(self, d_out, hidden):
+        super(TextPostnet, self).__init__()
+        self.fc1 = nn.Linear(d_out, hidden)
+        self.dropout1 = nn.Dropout(p=0.2)
+        self.fc2 = nn.Linear(hidden, len(symbols))
+
+    def forward(self, decode_out):
+        """
+        Need to do log softmax if you want probabilities
+        """
+        return self.fc2(self.dropout1(torch.relu(self.fc1(decode_out))))
 
 class TransformerEncoder(nn.Module):
     # TODO: Fill in from TTS repo :)

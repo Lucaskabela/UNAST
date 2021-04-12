@@ -8,6 +8,27 @@ import librosa
 import audio_parameters as ap
 import json
 import sys
+import torch.utils.tensorboard as tb
+import shutil
+
+PAD_IDX = 0
+SOS_IDX = 1
+EOS_IDX = 2
+
+
+def noise_fn(to_noise, mask_p=.3, swap_p=0):
+    """
+    to_noise should be [batch x seq_len x dim], and we want to hide entire swaths
+    of the sequence
+    """
+    # NOTE: swap_p does nothing!
+    gen = torch.zeros((to_noise.shape[0], to_noise.shape[1]), device=to_noise.device)
+    gen.fill_(1-mask_p)
+    zero_mask = torch.bernoulli(gen).unsqueeze(-1)
+    return to_noise * zero_mask
+
+def sent_lens_to_mask(lens, max_length):
+    return torch.from_numpy(np.asarray([[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] for i in range(0, lens.shape[0])]))
 
 def set_seed(seed):
     '''
@@ -19,8 +40,70 @@ def set_seed(seed):
         - seed: An integer seed for consistency in different runs
     ''' 
     torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
     random.seed(seed)
     np.random.seed(seed)
+
+
+def init_device():
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cpu")
+    return device
+
+
+def init_logger(log_dir=None):
+    train_logger, valid_logger = None, None
+    if log_dir is not None:
+        train_logger = tb.SummaryWriter(path.join(log_dir, "train"))
+        valid_logger = tb.SummaryWriter(path.join(log_dir, "valid"))
+    return train_logger, valid_logger
+
+
+# Next two methods courtesy of: https://towardsdatascience.com/how-to-save-and-load-a-model-in-pytorch-with-a-complete-example-c2920e617dee
+def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):
+    """
+    state: checkpoint we want to save.  State is a dict with keys:
+            ['epoch','valid_loss_min', 'state_dict', 'optimizer']
+    is_best: is this the best checkpoint; min validation loss
+    checkpoint_path: path to save checkpoint
+    best_model_path: path to save best model
+    """
+    state = {
+        'epoch': epoch + 1,
+        'valid_loss_min': valid_loss,
+        'state_dict': model.state_dict(),
+        'optimizer': optimizer.state_dict(),
+    }
+
+    f_path = checkpoint_path + '/model_{}.ckpt'.format(state['epoch'])
+    # save checkpoint data to the path given, checkpoint_path
+    torch.save(state, f_path)
+    # if it is a best model, min validation loss
+    if is_best:
+        best_fpath = checkpoint_path + '/model_best.ckpt'
+        # copy that checkpoint file to best path given, best_model_path
+        shutil.copyfile(f_path, best_fpath)
+
+
+def load_ckp(checkpoint_fpath, model, optimizer):
+    """
+    checkpoint_path: path to save checkpoint
+    model: model that we want to load checkpoint parameters into       
+    optimizer: optimizer we defined in previous training
+    """
+    # load check point
+    checkpoint = torch.load(checkpoint_fpath)
+
+    # initialize state_dicts from checkpoint to model
+    model.load_state_dict(checkpoint['state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+
+
+    return checkpoint['epoch'], checkpoint['valid_loss_min'], model, optimizer
+
 
 def parse_with_config(parser):
     """
