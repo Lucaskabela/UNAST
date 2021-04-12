@@ -190,7 +190,7 @@ class SpeechRNN(AutoEncoderNet):
         batch_size = enc_output.shape[0]
         outputs = []
         stops = []
-        stop_lens = torch.zeros(batch_size).to(enc_output.device)
+        stop_lens = torch.zeros(batch_size, device=enc_output.device)
         
         # get a all 0 frame for first timestep
         input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
@@ -308,7 +308,7 @@ class TextRNN(AutoEncoderNet):
         """
         batch_size, max_out_len = target.shape[0], target.shape[1]
         outputs = []
-        input_ = torch.from_numpy(np.asarray([SOS_IDX for i in range(0, batch_size)]))
+        input_ = torch.from_numpy(np.asarray([SOS_IDX for i in range(0, batch_size)]), device=enc_output.device)
         for i in range(max_out_len):
             input_embed = self.prenet.embed(input_).unsqueeze(1)
             dec_out, hidden_state = self.decode(input_embed, hidden_state, enc_output, enc_ctxt_mask)
@@ -346,10 +346,10 @@ class TextRNN(AutoEncoderNet):
 
         batch_size = enc_output.shape[0]
         outputs = []
-        seq_lens = torch.zeros(batch_size).to(enc_output.device)
+        seq_lens = torch.zeros(batch_size, device=enc_output.device)
         
         # get a all 0 frame for first timestep
-        input_ = torch.from_numpy(np.asarray([SOS_IDX for i in range(0, batch_size)]))
+        input_ = torch.from_numpy(np.asarray([SOS_IDX for i in range(0, batch_size)]), device=enc_output.device)
         i = 0
         keep_gen = torch.all(stop_lens.neq(0)) and i < max_len
 

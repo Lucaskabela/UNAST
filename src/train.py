@@ -20,21 +20,35 @@ from collections import defaultdict
 
 DEVICE = init_device()
 
+def process_batch(batch):
+    # Pos_text is unused so don't even bother loading it up
+    character, mel, mel_input, _, pos_mel, text_len = batch
+
+    # send stuff we use a lot to device - this is character, mel, mel_input, and pos_mel
+    character = character.to(DEVICE)
+    mel, mel_input, pos_mel = mel.to(DEVICE), mel_input.to(DEVICE), pos_mel.to(DEVICE)
+    gold_mel, gold_char = mel.detach(), character.detach().permute(1, 0)
+
+    # stop label should be 1 for length
+    # currently, find first nonzero (so pad_idx) in pos_mel, or set to length
+    with torch.no_grad():
+        end_mask_max, end_mask_idx = torch.max((pos_mel == PAD_IDX), dim=1)
+        end_mask_idx[end_mask_max == 0] = pos_mel.shape[1] - 1
+        gold_stop = F.one_hot(end_mask_idx, pos_mel.shape[1]).float().detach()
+
+    return (character, mel, mel_input, text_len), (gold_char, gold_mel, gold_stop)
+
+
 def text_loss(gold_char, pred_char):
     return F.cross_entropy(text_pred, char_gold, ignore_index=PAD_IDX)
 
 
-def speech_loss(gold_mel, pos_mel, pred_mel, stop_pred):
+def speech_loss(gold_mel, stop_label, pred_mel, stop_pred):
 
     # Should be [batch_size x seq_length] for stop 
     pred_loss = F.mse_loss(pred_mel, gold_mel)
-
-    # TODO: return actual lengths, not just computed off padding
-    # currently, find first nonzero (so pad_idx) in pos_mel, or set to length
-    end_mask_max, end_mask_idx = torch.max((pos_mel == PAD_IDX), dim=1)
-    end_mask_idx[end_mask_max == 0] = pos_mel.shape[1] - 1
-    stop_label = F.one_hot(end_mask_idx, pos_mel.shape[1]).float()
     stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
+    return pred_loss + stop_loss
 
 def discriminator_loss(output, target):
     return F.cross_entropy(output, target)
@@ -94,45 +108,44 @@ def autoencoder_step(model, batch):
     """
     Compute and return the loss for autoencoders
     """
-    character, mel, mel_input, pos_text, pos_mel, text_len = batch
-    character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
-    mel_gold, char_gold = mel.detach(), character.detach().permute(1, 0)
+    x, y = process_batch(batch)
+    character, mel, mel_input, _  = x
+    gold_char, gold_mel, gold_stop = y
 
     text_pred = model.text_ae(character).permute(1, 2, 0)
     pred, stop_pred = model.speech_ae(mel, mel_input)
     
-    # TODO: add end length loss
-    s_ae_loss = speech_loss(mel_gold, pos_mel, pred, stop_pred)
-    t_ae_loss = text_loss(gold_char, pred_char)
+    s_ae_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
+    t_ae_loss = text_loss(gold_char, text_pred)
     return t_ae_loss, s_ae_loss
 
 
 def supervised_step(model, batch):
-    character, mel, mel_input, pos_text, pos_mel, text_len = batch
-    character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
-    mel_gold, char_gold = mel.detach(), character.detach().permute(1, 0)
+    x, y = process_batch(batch)
+    character, mel, mel_input, _  = x
+    gold_char, gold_mel, gold_stop = y
 
     pred, stop_pred = model.tts(character, mel_input)
     text_pred = model.asr(character, mel).permute(1, 2, 0)
     
-    tts_loss = speech_loss(mel_gold, pos_mel, pred, stop_pred)
-    asr_loss = text_loss(gold_char, pred_char)
+    tts_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
+    asr_loss = text_loss(gold_char, text_pred)
     return asr_loss, tts_loss
 
 
 def crossmodel_step(model, batch):
     #NOTE: not sure if this will fail bc multiple grads on the model...
-    character, mel, mel_input, pos_text, pos_mel, text_len = unsupervised_batch
-    character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
-    mel_gold, char_gold = mel.detach(), character.detach().permute(1, 0)
+    x, y = process_batch(batch)
+    character, mel, mel_input, _  = x
+    gold_char, gold_mel, gold_stop = y
 
     # Do speech!
     pred, stop_pred = model.cm_speech_in(mel, mel_input)
-    s_cm_loss = speech_loss(mel_gold, pos_mel, pred, stop_pred)
+    s_cm_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
 
     # Now do text!
     text_pred = model.cm_text_in(character).permute(1, 2, 0)
-    t_cm_loss = text_loss(gold_char, pred_char)
+    t_cm_loss = text_loss(gold_char, text_pred)
     return t_cm_loss, s_cm_loss
 
 def train(args):
@@ -215,18 +228,18 @@ def train(args):
             if epoch_step % 3 == 2:
 
                 # NOTE: do not use cross_model here bc need to take optimizer step inbetween
-                character, mel, mel_input, pos_text, pos_mel, text_len = unsupervised_batch
-                character, mel, mel_input = character.to(DEVICE), mel.to(DEVICE), mel_input.to(DEVICE)
-                mel_gold, char_gold = mel.detach(), character.detach().permute(1, 0)
+                x, y = process_batch(batch)
+                character, mel, mel_input, _  = x
+                gold_char, gold_mel, gold_stop = y
 
                 # Do speech!
                 pred, stop_pred = model.cm_speech_in(mel, mel_input)
-                s_cm_loss = F.mse_loss(pred, mel_gold)
+                s_cm_loss = speech_loss(gold_mel, stop_label, pred, stop_pred)
                 optimizer_step(s_cm_loss, model, optimizer, args)
 
                 # Now do text!
                 text_pred = model.cm_text_in(character).permute(1, 2, 0)
-                t_cm_loss = F.cross_entropy(text_pred, char_gold, ignore_index=PAD_IDX)
+                t_cm_loss = text_loss(gold_char, text_pred)
                 optimizer_step(t_cm_loss, model, optimizer, args)
 
                 # Log losses

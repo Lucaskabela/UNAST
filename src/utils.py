@@ -42,7 +42,11 @@ def noise_fn(to_noise, mask_p=.3, swap_p=0):
 
 
 def sent_lens_to_mask(lens, max_length):
-    return torch.from_numpy(np.asarray([[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] for i in range(0, lens.shape[0])]))
+    """
+    lens should be tensor of dim [batch_size]
+    """
+    return torch.from_numpy(np.asarray([[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] for i in range(0, lens.shape[0])]), 
+        device=lens.device)
 
 def set_seed(seed):
     '''
