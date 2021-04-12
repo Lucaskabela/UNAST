@@ -24,7 +24,7 @@ def noise_fn(to_noise, mask_p=.3, swap_p=0):
     # NOTE: swap_p does nothing!
     gen = torch.zeros((to_noise.shape[0], to_noise.shape[1]), device=to_noise.device)
     gen.fill_(1-mask_p)
-    zero_mask = torch.bernoulli(gen)
+    zero_mask = torch.bernoulli(gen).unsqueeze(-1)
     return to_noise * zero_mask
 
 def sent_lens_to_mask(lens, max_length):

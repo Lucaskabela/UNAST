@@ -127,7 +127,7 @@ class SpeechRNN(AutoEncoderNet):
         pad_mask = torch.all(raw_input_tensor.eq(PAD_IDX), dim=-1).float().squeeze() 
         return self.prenet(raw_input_tensor), pad_mask
 
-    def encode(self, raw_input_tensor):
+    def encode(self, raw_input_tensor, noise_in=False):
         """
         Returns:
             - output: a tensor of shape [batch_size x seq_len x latent_dim], which
@@ -139,6 +139,8 @@ class SpeechRNN(AutoEncoderNet):
                 indices and 0 for everything else
         """
         mel_features, pad_mask = self.preprocess(raw_input_tensor)
+        if noise_in:
+            mel_features = noise_fn(mel_features)
         enc_output, hidden_state = self.encoder(mel_features)
         return enc_output, hidden_state, pad_mask
 
@@ -213,10 +215,8 @@ class SpeechRNN(AutoEncoderNet):
     def postprocess(self, dec_output, distrib=False):
         return self.postnet(dec_output)
 
-    def forward(self, input_, mel_input, noise_in=False):
-        if noise_in:
-            input_ = noise_fn(input_)
-        encoder_outputs, latent_hidden, pad_mask = self.encode(input_)
+    def forward(self, input_, mel_input, noise_in=True):
+        encoder_outputs, latent_hidden, pad_mask = self.encode(input_, noise_in=noise_in)
         pred, stop_pred = self.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
         return pred, stop_pred
         
@@ -244,7 +244,7 @@ class TextRNN(AutoEncoderNet):
         pad_mask = raw_input_tensor.eq(PAD_IDX).float().squeeze() 
         return self.prenet(raw_input_tensor), pad_mask
 
-    def encode(self, raw_input_tensor):
+    def encode(self, raw_input_tensor, noise_in=False):
         """
         Returns:
             - output: a tensor of shape [batch_size x seq_len x latent_dim], which
@@ -256,6 +256,8 @@ class TextRNN(AutoEncoderNet):
                 indices and 0 for everything else
         """
         embedded_phonemes, pad_mask = self.preprocess(raw_input_tensor)
+        if noise_in:
+            embedded_phonemes = noise_fn(embedded_phonemes)
         enc_output, hidden_state = self.encoder(embedded_phonemes)
         return enc_output, hidden_state, pad_mask
 
@@ -331,12 +333,7 @@ class TextRNN(AutoEncoderNet):
         res = res.masked_fill(pad_mask, PAD_IDX)
         return res
 
-    def forward(self, input_):
-        if noise_in:
-            input_masked = noise_fn(input_)
-            print(input_)
-        else:
-            input_masked = input_
-        encoder_outputs, latent_hidden, pad_mask = self.encode(input_masked)
+    def forward(self, input_, noise_in=True):
+        encoder_outputs, latent_hidden, pad_mask = self.encode(input_, noise_in=noise_in)
         pred = self.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask)
         return pred
