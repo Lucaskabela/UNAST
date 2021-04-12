@@ -28,6 +28,19 @@ def per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengths):
         hyp_sents.append(' '.join(hypothesis[b][:].tolist()[:hypothesis_lengths[b]]))
     return wer(gt_sents, hyp_sents)
 
+
+def noise_fn(to_noise, mask_p=.3, swap_p=0):
+    """
+    to_noise should be [batch x seq_len x dim], and we want to hide entire swaths
+    of the sequence
+    """
+    # NOTE: swap_p does nothing!
+    gen = torch.zeros((to_noise.shape[0], to_noise.shape[1]), device=to_noise.device)
+    gen.fill_(1-mask_p)
+    zero_mask = torch.bernoulli(gen).unsqueeze(-1)
+    return to_noise * zero_mask
+
+
 def sent_lens_to_mask(lens, max_length):
     return torch.from_numpy(np.asarray([[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] for i in range(0, lens.shape[0])]))
 

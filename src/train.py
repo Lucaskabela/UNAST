@@ -225,7 +225,7 @@ def train_text_auto(args):
     set_seed(args.seed)
 
     # TODO: Replace get_dataset() with getting train/valid/test split
-    dataset = get_dataset()
+    dataset = get_dataset('unlabeled_train.csv')
     #NOTE: Subset for prototyping
     # dataset = torch.utils.data.Subset(dataset, range(1000))
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
@@ -244,7 +244,7 @@ def train_text_auto(args):
             pred = model.forward(character).permute(1, 2, 0)
             
             char_ = character.permute(1, 0)
-            loss = F.cross_entropy(pred_, char_, ignore_index=PAD_IDX)
+            loss = F.cross_entropy(pred, char_, ignore_index=PAD_IDX)
             
             optimizer.zero_grad()
             loss.backward()
@@ -287,7 +287,7 @@ def train_speech_auto(args):
     set_seed(args.seed)
 
     # TODO: Replace get_dataset() with getting train/valid/test split
-    dataset = get_dataset()
+    dataset = get_dataset('unlabeled_train.csv')
     #NOTE: Subset for prototyping
     # dataset = torch.utils.data.Subset(dataset, range(1000))
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
@@ -306,8 +306,17 @@ def train_speech_auto(args):
             pred, stop_pred = model.forward(mel, mel_input)
 
             
-            loss = F.mse_loss(pred, mel)
+            pred_loss = F.mse_loss(pred, mel)
+            # Should be [batch_size x seq_length] for stop 
+
+            # TODO: return actual lengths, not just computed off padding
+            # currently, find first nonzero (so pad_idx) in pos_mel, or set to length
+            end_mask_max, end_mask_idx = torch.max((pos_mel == PAD_IDX), dim=1)
+            end_mask_idx[end_mask_max == 0] = pos_mel.shape[1] - 1
+            stop_label = F.one_hot(end_mask_idx, pos_mel.shape[1]).float()
+            stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
             
+            loss = pred_loss + stop_loss
             optimizer.zero_grad()
             loss.backward()
             if args.grad_clip > 0.0:
