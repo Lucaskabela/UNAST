@@ -21,6 +21,7 @@
     "d_layers": 1,
     "d_attn": false,
     "grad_clip": 1.0,
+    "num_workers": 16,
     "load_path": null,
     "train_discriminator": false,
     "use_gpu": true,

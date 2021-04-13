@@ -65,7 +65,7 @@ def set_seed(seed):
 
 
 def init_device(args):
-    if torch.cuda.is_available() and args.gpu:
+    if torch.cuda.is_available() and args.use_gpu:
         device = torch.device("cuda")
     else:
         device = torch.device("cpu")

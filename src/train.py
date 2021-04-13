@@ -191,14 +191,8 @@ def evaluate(model, valid_dataset):
 
 def train(args):
     set_seed(args.seed)
-
-    # TODO: Move to helper function
-    print("#### Getting Dataset ####")
-    supervised_train_dataset = get_dataset('labeled_train.csv')
-    unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
-    val_dataset = get_dataset('val.csv')
-    full_train_dataset = get_dataset('full_train.csv')
-
+    supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset = \
+        initialize_datasets(args)
     s_epoch, best, model, optimizer = initialize_model(args)
 
     for epoch in range(s_epoch, args.epochs):
@@ -206,17 +200,17 @@ def train(args):
         losses = defaultdict(list)
 
         # Get datasets TODO: Find a better way
-        supervised_dataloader = DataLoader(supervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+        supervised_dataloader = DataLoader(supervised_train_dataset, batch_size=args.batch_size, 
+            shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=args.num_workers)
         supervised_iter = iter(supervised_dataloader)
 
-        unsupervised_dataloader = DataLoader(unsupervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
-
+        unsupervised_dataloader = DataLoader(unsupervised_train_dataset, batch_size=args.batch_size, 
+            shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=args.num_workers)
         bar = tqdm(unsupervised_dataloader)
         bar.set_description("Epoch {} Training Model".format(epoch))
 
         # step counter for a single epoch - determines which training task to do
         epoch_step = 0
-
         # We consider one pass through the unsupervised dataset as one epoch
         for unsupervised_batch in bar:
             epoch_step += 1
@@ -225,43 +219,35 @@ def train(args):
                 try:
                     supervised_batch = supervised_iter.next()
                 except StopIteration:
-                    supervised_iter = iter(DataLoader(supervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16))
+                    supervised_iter = iter(DataLoader(supervised_train_dataset, 
+                        batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, 
+                        drop_last=True, num_workers=args.num_workers))
                     supervised_batch = supervised_iter.next()
             
                 train_sp_step(losses, model, optimizer, supervised_batch, args)
-                # This enforces that we still use the unsupervised_batch in this
-                # iteration
+                # Enforces  we still use the unsupervised_batch in this iteration
                 epoch_step += 1
-
             if epoch_step % 3 == 1:
                 train_ae_step(losses, model, optimizer, unsupervised_batch, args)
-
             if epoch_step % 3 == 2:
                 train_cm_step(losses, model, optimizer, unsupervised_batch, args)
 
         if args.train_discriminator:
-            # Train discriminator
-            # discriminator_dataloader = DataLoader(full_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+            # TODO: Train discriminator
+            pass
 
-            bar = tqdm(discriminator_dataloader)
-            bar.set_description("Epoch {} Training Discriminator".format(epoch))
-            for batch in bar:
-                # TODO: Freeze model
-                # TODO: Train discriminator over the whole train dataset
-                pass
-
+        # Eval and save
         log_loss_metrics(losses, epoch)
         per, eval_losses = evaluate(model, valid_dataset)
         log_loss_metrics(eval_losses, epoch, eval=True)
         if per < best:
-            print("Saving model!")
+            print("Saving model! with PER {}\%".format(per))
             best = per
             save_ckp(epoch, per, model, optimizer, True, args.checkpoint_path)
     model.eval()
     return model
 
 def log_loss_metrics(losses, epoch, eval=False):
-
     kind = "Train"
     if eval:
         kind = "Eval_"
@@ -270,7 +256,7 @@ def log_loss_metrics(losses, epoch, eval=False):
     for key_, loss in enumerate(losses):
         out_str += "{} loss =  {:0.3f} \t".format(key, np.avg(loss))
     print(out_str)
-    # TODO: Add tensorboard logging
+    # TODO: Add tensorboard logging ?
 
 def train_text_auto(args):
     ''' Purely for testing purposes'''
@@ -365,7 +351,6 @@ def train_speech_auto(args):
 def initialize_model(args):
     """
         Using args, initialize starting epoch, best per, model, optimizer
-
     """
     if args.load_path is not None:
         model = UNAST(None, None, None)
@@ -394,6 +379,13 @@ def initialize_model(args):
 
     return s_epoch, best, model, optimizer
 
+def initialize_datasets(args):
+    # TODO: replace these if we want
+    print("#### Getting Dataset ####")
+    supervised_train_dataset = get_dataset('labeled_train.csv')
+    unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
+    val_dataset = get_dataset('val.csv')
+    full_train_dataset = get_dataset('full_train.csv')
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
