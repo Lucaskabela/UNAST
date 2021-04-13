@@ -16,6 +16,8 @@ from scipy import signal
 from data import sequence_to_text
 import os
 
+from scipy import signal
+
 PAD_IDX = 0
 SOS_IDX = 1
 EOS_IDX = 2
