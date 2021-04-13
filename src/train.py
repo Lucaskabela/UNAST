@@ -39,13 +39,11 @@ def process_batch(batch):
     return (character, mel, mel_input, text_len), (gold_char, gold_mel, gold_stop)
 
 
-def text_loss(gold_char, pred_char):
-    return F.cross_entropy(text_pred, char_gold, ignore_index=PAD_IDX)
-
+#####----- LOSS FUNCTIONS -----#####
+def text_loss(gold_char, text_pred):
+    return F.cross_entropy(text_pred, gold_char, ignore_index=PAD_IDX)
 
 def speech_loss(gold_mel, stop_label, pred_mel, stop_pred):
-
-    # Should be [batch_size x seq_length] for stop 
     pred_loss = F.mse_loss(pred_mel, gold_mel)
     stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
     return pred_loss + stop_loss
@@ -54,6 +52,106 @@ def discriminator_loss(output, target):
     return F.cross_entropy(output, target)
 
 
+#####----- Use these to run a task on a batch ----#####
+def autoencoder_step(model, batch):
+    """
+    Compute and return the loss for autoencoders
+    """
+    x, y = process_batch(batch)
+    character, mel, mel_input, _  = x
+    gold_char, gold_mel, gold_stop = y
+
+    text_pred = model.text_ae(character).permute(1, 2, 0)
+    pred, stop_pred = model.speech_ae(mel, mel_input)
+    
+    s_ae_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
+    t_ae_loss = text_loss(gold_char, text_pred)
+    return t_ae_loss, s_ae_loss
+
+def supervised_step(model, batch):
+    x, y = process_batch(batch)
+    character, mel, mel_input, _  = x
+    gold_char, gold_mel, gold_stop = y
+
+    pred, stop_pred = model.tts(character, mel_input)
+    text_pred = model.asr(character, mel).permute(1, 2, 0)
+    
+    tts_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
+    asr_loss = text_loss(gold_char, text_pred)
+    return asr_loss, tts_loss
+
+def crossmodel_step(model, batch):
+    #NOTE: not sure if this will fail bc multiple grads on the model...
+    x, y = process_batch(batch)
+    character, mel, mel_input, _  = x
+    gold_char, gold_mel, gold_stop = y
+
+    # Do speech!
+    pred, stop_pred = model.cm_speech_in(mel, mel_input)
+    s_cm_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
+
+    # Now do text!
+    text_pred = model.cm_text_in(character).permute(1, 2, 0)
+    t_cm_loss = text_loss(gold_char, text_pred)
+    return t_cm_loss, s_cm_loss
+
+
+#####---- Use these to train on a task -----#####
+def optimizer_step(loss, model, optimizer, args):
+
+    # Take a optimizer step!
+    optimizer.zero_grad()
+    loss.backward()
+    if args.grad_clip > 0.0:
+        nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
+    optimizer.step()
+    return loss.detach().cpu().item()
+
+def train_sp_step(losses, model, optimizer, batch, args):
+    asr_loss, tts_loss = supervised_step(model, supervised_batch)
+    loss = tts_loss + asr_loss
+
+    # Take a optimizer and append losses here!
+    optimizer_step(loss, model, optimizer, args)
+
+    # Log losses
+    losses['asr_'].append(asr_loss.detach().cpu().item())
+    losses['tts_'].append(tts_loss.detach().cpu().item())
+
+def train_ae_step(losses, model, optimizer, batch, args):
+    
+    t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
+    loss = t_ae_loss + s_ae_loss
+
+    # Take a optimizer step!
+    optimizer_step(loss, model, optimizer, args)
+
+    # Log losses
+    losses['t_ae'].append(t_ae_loss.detach().cpu().item())
+    losses['s_ae'].append(s_ae_loss.detach().cpu().item())
+
+def train_cm_step(losses, model, optimizer, batch, args):
+    # NOTE: do not use cross_model here bc need to take optimizer step inbetween
+    x, y = process_batch(batch)
+    character, mel, mel_input, _  = x
+    gold_char, gold_mel, gold_stop = y
+
+    # Do speech!
+    pred, stop_pred = model.cm_speech_in(mel, mel_input)
+    s_cm_loss = speech_loss(gold_mel, stop_label, pred, stop_pred)
+    optimizer_step(s_cm_loss, model, optimizer, args)
+
+    # Now do text!
+    text_pred = model.cm_text_in(character).permute(1, 2, 0)
+    t_cm_loss = text_loss(gold_char, text_pred)
+    optimizer_step(t_cm_loss, model, optimizer, args)
+
+    # Log losses
+    losses['s_cm'].append(s_cm_loss.detach().cpu().item())
+    losses['t_cm'].append(t_cm_loss.detach().cpu().item())
+
+
+#####----- Train and evaluate -----#####
 def evaluate(model, valid_dataset):
     """
         Expect validation set to have paired speech & text!
@@ -92,71 +190,17 @@ def evaluate(model, valid_dataset):
 
     return per/n_iters, losses
 
-
-def optimizer_step(loss, model, optimizer, args):
-
-    # Take a optimizer step!
-    optimizer.zero_grad()
-    loss.backward()
-    if args.grad_clip > 0.0:
-        nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-    optimizer.step()
-    return loss.detach().cpu().item()
-
-
-def autoencoder_step(model, batch):
-    """
-    Compute and return the loss for autoencoders
-    """
-    x, y = process_batch(batch)
-    character, mel, mel_input, _  = x
-    gold_char, gold_mel, gold_stop = y
-
-    text_pred = model.text_ae(character).permute(1, 2, 0)
-    pred, stop_pred = model.speech_ae(mel, mel_input)
-    
-    s_ae_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
-    t_ae_loss = text_loss(gold_char, text_pred)
-    return t_ae_loss, s_ae_loss
-
-
-def supervised_step(model, batch):
-    x, y = process_batch(batch)
-    character, mel, mel_input, _  = x
-    gold_char, gold_mel, gold_stop = y
-
-    pred, stop_pred = model.tts(character, mel_input)
-    text_pred = model.asr(character, mel).permute(1, 2, 0)
-    
-    tts_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
-    asr_loss = text_loss(gold_char, text_pred)
-    return asr_loss, tts_loss
-
-
-def crossmodel_step(model, batch):
-    #NOTE: not sure if this will fail bc multiple grads on the model...
-    x, y = process_batch(batch)
-    character, mel, mel_input, _  = x
-    gold_char, gold_mel, gold_stop = y
-
-    # Do speech!
-    pred, stop_pred = model.cm_speech_in(mel, mel_input)
-    s_cm_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
-
-    # Now do text!
-    text_pred = model.cm_text_in(character).permute(1, 2, 0)
-    t_cm_loss = text_loss(gold_char, text_pred)
-    return t_cm_loss, s_cm_loss
-
 def train(args):
     set_seed(args.seed)
 
+    # TODO: Move to helper function
     print("#### Getting Dataset ####")
     supervised_train_dataset = get_dataset('labeled_train.csv')
     unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
     val_dataset = get_dataset('val.csv')
     full_train_dataset = get_dataset('full_train.csv')
 
+    # TODO: move to helper function 
     # init models and optimizers
     if args.load_path is None:
         text_m = TextRNN(args).to(DEVICE)  
@@ -174,7 +218,9 @@ def train(args):
 
     for epoch in range(s_epoch, args.epochs):
 
-        # Training model
+        losses = defaultdict(list)
+
+        # Get datasets TODO: Find a better way
         supervised_dataloader = DataLoader(supervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
         supervised_iter = iter(supervised_dataloader)
 
@@ -183,12 +229,10 @@ def train(args):
         bar = tqdm(unsupervised_dataloader)
         bar.set_description("Epoch {} Training Model".format(epoch))
 
-        # step counter for a single epoch
-        # used to determine which training task to do
+        # step counter for a single epoch - determines which training task to do
         epoch_step = 0
-        losses = defaultdict(list)
-        # We are considering one pass through the unsupervised dataset as
-        # one epoch
+
+        # We consider one pass through the unsupervised dataset as one epoch
         for unsupervised_batch in bar:
             epoch_step += 1
             if epoch_step % 3 == 0:
@@ -199,56 +243,20 @@ def train(args):
                     supervised_iter = iter(DataLoader(supervised_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16))
                     supervised_batch = supervised_iter.next()
             
-                asr_loss, tts_loss = supervised_step(model, supervised_batch)
-                loss = tts_loss + asr_loss
-
-                # Take a optimizer and append losses here!
-                optimizer_step(loss, model, optimizer, args)
-
-                # Log losses
-                losses['asr_'].append(asr_loss.detach().cpu().item())
-                losses['tts_'].append(tts_loss.detach().cpu().item())
-
+                train_sp_step(losses, model, optimizer, supervised_batch, args)
                 # This enforces that we still use the unsupervised_batch in this
                 # iteration
                 epoch_step += 1
 
             if epoch_step % 3 == 1:
-
-                t_ae_loss, s_ae_loss = autoencoder_step(model, unsupervised_batch)
-                loss = t_ae_loss + s_ae_loss
-
-                # Take a optimizer step!
-                optimizer_step(loss, model, optimizer, args)
-
-                # Log losses
-                losses['t_ae'].append(t_ae_loss.detach().cpu().item())
-                losses['s_ae'].append(s_ae_loss.detach().cpu().item())
+                train_ae_step(losses, model, optimizer, unsupervised_batch, args)
 
             if epoch_step % 3 == 2:
-
-                # NOTE: do not use cross_model here bc need to take optimizer step inbetween
-                x, y = process_batch(batch)
-                character, mel, mel_input, _  = x
-                gold_char, gold_mel, gold_stop = y
-
-                # Do speech!
-                pred, stop_pred = model.cm_speech_in(mel, mel_input)
-                s_cm_loss = speech_loss(gold_mel, stop_label, pred, stop_pred)
-                optimizer_step(s_cm_loss, model, optimizer, args)
-
-                # Now do text!
-                text_pred = model.cm_text_in(character).permute(1, 2, 0)
-                t_cm_loss = text_loss(gold_char, text_pred)
-                optimizer_step(t_cm_loss, model, optimizer, args)
-
-                # Log losses
-                losses['s_cm'].append(s_cm_loss.detach().cpu().item())
-                losses['t_cm'].append(t_cm_loss.detach().cpu().item())
+                train_cm_step(losses, model, optimizer, unsupervised_batch, args)
 
         if args.train_discriminator:
             # Train discriminator
-            discriminator_dataloader = DataLoader(full_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+            # discriminator_dataloader = DataLoader(full_train_dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
 
             bar = tqdm(discriminator_dataloader)
             bar.set_description("Epoch {} Training Discriminator".format(epoch))
@@ -280,28 +288,15 @@ def log_loss_metrics(losses, epoch, eval=False):
     # TODO: Add tensorboard logging
 
 def train_text_auto(args):
-    '''
-    TODO:
-        1. DONE -- Get Dataset
-        2. Init models & optimizers
-        3. Train, or for each epoch:
-                For each batch:
-                - Choose which loss function
-                - Freeze appropriate networks
-                - Run through networks
-                - Get loss
-                - Update
-                Metrics (like validation, etc)
-        4. Return trained text & speech for validation, metric measurement
-
-        TODO: Include functionality for saving, loading from save
-    '''
+    ''' Purely for testing purposes'''
     set_seed(args.seed)
 
     # TODO: Replace get_dataset() with getting train/valid/test split
     dataset = get_dataset('unlabeled_train.csv')
+
     #NOTE: Subset for prototyping
     # dataset = torch.utils.data.Subset(dataset, range(1000))
+
     dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
     train_log, valid_log = None, None
     model = TextRNN(args).to(DEVICE)
@@ -329,35 +324,12 @@ def train_text_auto(args):
             if train_log is not None:
                 train_log.add_scalar("loss", losses[-1], global_step)
             global_step += 1
-
-        # evaluate(model, valid_dataset)
-
         avg_l = np.mean(losses)
         print("epoch %-3d \t loss = %0.3f \t" % (epoch, avg_l))
-        # if validation < best:
-        # TODO: Add model (and optimizer) saving for reloading training
-        #     print("Saving model!")
-        #     best = validation
-        #     model.save_model()
     return model
 
 def train_speech_auto(args):
-    '''
-    TODO:
-        1. Get Dataset
-        2. Init models & optimizers
-        3. Train, or for each epoch:
-                For each batch:
-                - Choose which loss function
-                - Freeze appropriate networks
-                - Run through networks
-                - Get loss
-                - Update
-                Metrics (like validation, etc)
-        4. Return trained text & speech for validation, metric measurement
-
-        TODO: Include functionality for saving, loading from save
-    '''
+    ''' Purely for testing purposes'''
     set_seed(args.seed)
 
     # TODO: Replace get_dataset() with getting train/valid/test split
@@ -400,21 +372,16 @@ def train_speech_auto(args):
             if train_log is not None:
                 train_log.add_scalar("loss", losses[-1], global_step)
             global_step += 1
-
-        # evaluate(model, valid_dataset)
-
         avg_l = np.mean(losses)
         print("epoch %-3d \t loss = %0.3f \t" % (epoch, avg_l))
-        # if validation < best:
-        # TODO: Add model (and optimizer) saving for reloading training
-        #     print("Saving model!")
-        #     best = validation
-        #     model.save_model()
     return model
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', help='JSON config files')
     # TODO: clean up the parser/initialization of models
+    # NOTES: Layers should be the same
+    # Hidden sizes should be the same (or models changed to fix it)
     args = parse_with_config(parser)
     train(args)
