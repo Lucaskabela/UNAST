@@ -18,7 +18,7 @@ import torch
 import numpy as np
 from collections import defaultdict
 
-DEVICE = init_device()
+# DEVICE is only global variable
 
 def process_batch(batch):
     # Pos_text is unused so don't even bother loading it up
@@ -40,6 +40,7 @@ def process_batch(batch):
 
 
 #####----- LOSS FUNCTIONS -----#####
+# TODO: add weights for the losses in args?
 def text_loss(gold_char, text_pred):
     return F.cross_entropy(text_pred, gold_char, ignore_index=PAD_IDX)
 
@@ -185,9 +186,7 @@ def evaluate(model, valid_dataset):
             print("Lengths", len_mask_idx.shape)
             per += compute_per(character.to(DEVICE), text_pred, text_len.to(DEVICE), len_mask_idx)
             n_iters += 1
-
-    model.train()
-
+    # TODO: evaluate speech inference somehow?
     return per/n_iters, losses
 
 def train(args):
@@ -200,24 +199,10 @@ def train(args):
     val_dataset = get_dataset('val.csv')
     full_train_dataset = get_dataset('full_train.csv')
 
-    # TODO: move to helper function 
-    # init models and optimizers
-    if args.load_path is None:
-        text_m = TextRNN(args).to(DEVICE)  
-        speech_m = SpeechRNN(args).to(DEVICE)
-        discriminator = None
-        model = UNAST(text_m, speech_m, discriminator)
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,  weight_decay=1e-5)
-        s_epoch, best = 0, 100
-    else:
-        model = UNAST(None, None, None)
-        optimizer = toch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
-        data = load_ckp(args.load_path, model, optimizer)
-        s_epoch, best, model, optimizer = data
-        s_epoch = s_epoch + 1
+    s_epoch, best, model, optimizer = initialize_model(args)
 
     for epoch in range(s_epoch, args.epochs):
-
+        model.train()
         losses = defaultdict(list)
 
         # Get datasets TODO: Find a better way
@@ -377,6 +362,39 @@ def train_speech_auto(args):
     return model
 
 
+def initialize_model(args):
+    """
+        Using args, initialize starting epoch, best per, model, optimizer
+
+    """
+    if args.load_path is not None:
+        model = UNAST(None, None, None)
+        optimizer = toch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+        s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
+        s_epoch = s_epoch + 1
+    else:
+        text_m, speech_m, discriminator = None, None, None
+        if args.model_type == 'rnn':
+            text_m = TextRNN(args).to(DEVICE)
+            speech_m = SpeechRNN(args).to(DEVICE)
+        elif args.model_type == 'transformer':
+            # TODO: Fill it in
+            pass
+
+        if args.use_discriminator:
+            # TODO: Fill it in
+            pass
+        model = UNAST(text_m, speech_m, discriminator)
+
+        # initialize optimizer
+        optimizer = None
+        if args.optim_type == 'adam':
+            optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+            s_epoch, best = 0, 100
+
+    return s_epoch, best, model, optimizer
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', help='JSON config files')
@@ -384,4 +402,6 @@ if __name__ == "__main__":
     # NOTES: Layers should be the same
     # Hidden sizes should be the same (or models changed to fix it)
     args = parse_with_config(parser)
+    global DEVICE
+    DEVICE = init_device(args)
     train(args)

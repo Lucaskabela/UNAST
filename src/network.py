@@ -87,6 +87,7 @@ class AutoEncoderNet(nn.Module):
 
 class UNAST(nn.Module):
     def __init__(self, text_m, speech_m, discriminator=None):
+        """NOTE: text_m and speech_m should be same type (RNN or Transformer)"""
         self.text_m = text_m
         self.speech_m = speech_m
         self.discriminator = discriminator
