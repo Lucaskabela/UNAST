@@ -106,8 +106,52 @@ def speech_loss(gold_mel, stop_label, pred_mel, stop_pred):
     stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
     return pred_loss + stop_loss
 
+
+def cross_entropy(input, target, size_average=True):
+    """ Cross entropy that accepts soft targets
+    Args:
+         pred: predictions for neural network
+         targets: targets, can be soft
+         size_average: if false, sum is returned instead of mean
+
+    Examples::
+
+        input = torch.FloatTensor([[1.1, 2.8, 1.3], [1.1, 2.1, 4.8]])
+        input = torch.autograd.Variable(out, requires_grad=True)
+
+        target = torch.FloatTensor([[0.05, 0.9, 0.05], [0.05, 0.05, 0.9]])
+        target = torch.autograd.Variable(y1)
+        loss = cross_entropy(input, target)
+        loss.backward()
+    """
+    logsoftmax = nn.LogSoftmax(1)
+    if size_average:
+        return torch.mean(torch.sum(-target * logsoftmax(input), dim=1))
+    else:
+        return torch.sum(torch.sum(-target * logsoftmax(input), dim=1))
+
 def discriminator_loss(output, target):
-    return F.cross_entropy(output, target)
+    return cross_entropy(output, target)
+
+def discriminator_target(output, target_type, smoothing=0.1):
+    """
+    Create the target labels with smoothing
+    Params
+        -output : [batch_size x 2]
+        -type : 'text' or 'speech'
+        -smoothing : label smoothing factor
+    Return
+        [batch_size x 2] tensor with target smoothed labels
+    """
+    target = torch.zeros_like(output)
+    if target_type == 'text':
+        smoothed_target_label = [1 - smoothing, smoothing]
+    else:
+        # target_type == 'speech' implicitly
+        smoothed_target_label = [smoothing, 1 - smoothing]
+    target[:,] = smoothed_target_label
+    return target
+
 
 
 #####----- Use these to run a task on a batch ----#####
@@ -152,6 +196,26 @@ def crossmodel_step(model, batch):
     text_pred = model.cm_text_in(character).permute(1, 2, 0)
     t_cm_loss = text_loss(gold_char, text_pred)
     return t_cm_loss, s_cm_loss
+
+def discriminator_hidden_to_loss(model, hid, target_type):
+    d_in = hid.permute(1,0,2)
+    d_out = model.discriminator(d_in[:, -1:, :]).permute(1,0,2)[0]
+    target = discriminator_target(d_out, target_type)
+    d_loss = discriminator_loss(d_out, target)
+    return d_loss
+
+def discriminator_step(model, batch):
+    x, y = process_batch(batch)
+    character, mel, _, _  = x
+
+    # text
+    _, t_hid, _ = model.text_m.encode(character)
+    t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'text')
+
+    # speech
+    _, s_hid, _ = model.speech_m.encode(mel)
+    s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'speech')
+    return t_d_loss, s_d_loss
 
 
 #####---- Use these to train on a task -----#####
@@ -207,6 +271,19 @@ def train_cm_step(losses, model, optimizer, batch, args):
     # Log losses
     losses['s_cm'].append(s_cm_loss.detach().cpu().item())
     losses['t_cm'].append(t_cm_loss.detach().cpu().item())
+
+def train_discriminator_step(losses, model, optimizer, batch, args):
+    model.text_m.eval()
+    model.speech_m.eval()
+    model.discriminator.train()
+
+    t_d_loss, s_d_loss = discriminator_step(model, batch)
+
+    loss = t_d_loss + s_d_loss
+    optimizer_step(loss, model, optimizer, args)
+
+    losses['t_d'].append(t_d_loss.detach().cpu().item())
+    losses['s_d'].append(s_d_loss.detach().cpu().item())
 
 
 #####----- Train and evaluate -----#####
