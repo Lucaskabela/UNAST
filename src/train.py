@@ -17,8 +17,56 @@ import torch.nn as nn
 import torch
 import numpy as np
 from collections import defaultdict
+import math
 
 # DEVICE is only global variable
+
+class BatchGetter():
+    def __init__(self, args, supervised_dataset, unsupervised_dataset, full_dataset):
+        self.batch_size = args.batch_size
+        self.num_workers = args.num_workers
+
+        self.supervised_dataloader = DataLoader(supervised_dataset,
+            batch_size=self.batch_size, shuffle=True,
+            collate_fn=collate_fn_transformer, drop_last=True,
+            num_workers=self.num_workers)
+        self.supervised_iter = iter(self.supervised_dataloader)
+
+        self.unsupervised_dataloader = DataLoader(unsupervised_dataset,
+            batch_size=self.batch_size, shuffle=True,
+            collate_fn=collate_fn_transformer, drop_last=True,
+            num_workers=self.num_workers)
+        self.unsupervised_iter = iter(self.unsupervised_dataloader)
+
+        self.discriminator_dataloader = DataLoader(full_dataset,
+            batch_size=self.batch_size, shuffle=True,
+            collate_fn=collate_fn_transformer, drop_last=True,
+            num_workers=self.num_workers)
+        self.discriminator_iter = iter(self.discriminator_dataloader)
+
+    def get_supervised_batch(self):
+        try:
+            batch = self.supervised_iter.next()
+        except StopIteration:
+            self.supervised_iter = iter(self.supervised_dataloader)
+            batch = self.supervised_iter.next()
+        return batch
+
+    def get_unsupervised_batch(self):
+        try:
+            batch = self.unsupervised_iter.next()
+        except StopIteration:
+            self.unsupervised_iter = iter(self.unsupervised_dataloader)
+            batch = self.unsupervised_iter.next()
+        return batch
+
+    def get_discriminator_batch(self):
+        try:
+            batch = self.discriminator_iter.next()
+        except StopIteration:
+            self.discriminator_iter = iter(self.discriminator_dataloader)
+            batch = self.discriminator_iter.next()
+        return batch
 
 def process_batch(batch):
     # Pos_text is unused so don't even bother loading it up
@@ -64,7 +112,7 @@ def autoencoder_step(model, batch):
 
     text_pred = model.text_ae(character).permute(1, 2, 0)
     pred, stop_pred = model.speech_ae(mel, mel_input)
-    
+
     s_ae_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
     t_ae_loss = text_loss(gold_char, text_pred)
     return t_ae_loss, s_ae_loss
@@ -76,7 +124,7 @@ def supervised_step(model, batch):
 
     pred, stop_pred = model.tts(character, mel_input)
     text_pred = model.asr(character, mel).permute(1, 2, 0)
-    
+
     tts_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
     asr_loss = text_loss(gold_char, text_pred)
     return asr_loss, tts_loss
@@ -120,7 +168,7 @@ def train_sp_step(losses, model, optimizer, batch, args):
     losses['tts_'].append(tts_loss.detach().cpu().item())
 
 def train_ae_step(losses, model, optimizer, batch, args):
-    
+
     t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
     loss = t_ae_loss + s_ae_loss
 
@@ -158,13 +206,13 @@ def evaluate(model, valid_dataset):
         Expect validation set to have paired speech & text!
         Primary evaluation is PER - can gauge training by the other losses
         We return on 6 other metrics:  autoencoder text loss, autoencoder speech loss,
-            ASR loss, and TTS loss, cross model text and cross model speech loss. 
+            ASR loss, and TTS loss, cross model text and cross model speech loss.
     """
     model.eval()
     with torch.no_grad():
         losses = defaultdict(list)
         per, n_iters = 0, 0
-        
+
         for batch in valid_dataset:
             character, mel, mel_input, pos_text, pos_mel, text_len = batch
 
@@ -199,42 +247,41 @@ def train(args):
         model.train()
         losses = defaultdict(list)
 
-        # Get datasets TODO: Find a better way
-        supervised_dataloader = DataLoader(supervised_train_dataset, batch_size=args.batch_size, 
-            shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=args.num_workers)
-        supervised_iter = iter(supervised_dataloader)
+        batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
 
-        unsupervised_dataloader = DataLoader(unsupervised_train_dataset, batch_size=args.batch_size, 
-            shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=args.num_workers)
-        bar = tqdm(unsupervised_dataloader)
-        bar.set_description("Epoch {} Training Model".format(epoch))
+        # one step is doing all 4 training tasks
+        if args.epoch_steps >= 0:
+            epoch_steps = args.epoch_steps
+        else:
+            # Define an epoch to be one pass through the discriminator's train
+            # dataset
+            # This makes it so the total number of steps is the same regardless # of whether we train the discriminator or not
+            total_batches_full_dataset = math.ceil(len(full_train_dataset) / args.batch_size)
+            epoch_steps = math.ceil(total_batches_full_dataset / args.d_steps)
 
-        # step counter for a single epoch - determines which training task to do
-        epoch_step = 0
-        # We consider one pass through the unsupervised dataset as one epoch
-        for unsupervised_batch in bar:
-            epoch_step += 1
-            if epoch_step % 3 == 0:
-                # Janky way to check to do a supervised step
-                try:
-                    supervised_batch = supervised_iter.next()
-                except StopIteration:
-                    supervised_iter = iter(DataLoader(supervised_train_dataset, 
-                        batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, 
-                        drop_last=True, num_workers=args.num_workers))
-                    supervised_batch = supervised_iter.next()
-            
-                train_sp_step(losses, model, optimizer, supervised_batch, args)
-                # Enforces  we still use the unsupervised_batch in this iteration
-                epoch_step += 1
-            if epoch_step % 3 == 1:
-                train_ae_step(losses, model, optimizer, unsupervised_batch, args)
-            if epoch_step % 3 == 2:
-                train_cm_step(losses, model, optimizer, unsupervised_batch, args)
+        bar = tqdm(range(0, epoch_steps))
+        bar.set_description("Epoch {}".format(epoch))
+        for _ in bar:
+            # DENOISING AUTO ENCODER
+            for _ in range(0, args.ae_steps):
+                batch = batch_getter.get_unsupervised_batch()
+                train_ae_step(losses, model, optimizer, batch, args)
 
-        if args.train_discriminator:
-            # TODO: Train discriminator
-            pass
+            # CM TTS/ASR
+            for _ in range(0, args.cm_steps):
+                batch = batch_getter.get_unsupervised_batch()
+                train_cm_step(losses, model, optimizer, batch, args)
+
+            # SUPERVISED
+            for _ in range(0, args.sp_steps):
+                batch = batch_getter.get_supervised_batch()
+                train_sp_step(losses, model, optimizer, batch, args)
+
+            # DISCRIMINATOR
+            if args.train_discriminator:
+                for _ in range(0, args.d_steps):
+                    batch = batch_getter.get_discriminator_batch()
+                    # TODO: Train discriminator
 
         # Eval and save
         log_loss_metrics(losses, epoch)
@@ -282,10 +329,10 @@ def train_text_auto(args):
             character, mel, mel_input, pos_text, pos_mel, text_len = data
             character = character.to(DEVICE)
             pred = model.forward(character).permute(1, 2, 0)
-            
+
             char_ = character.permute(1, 0)
             loss = F.cross_entropy(pred, char_, ignore_index=PAD_IDX)
-            
+
             optimizer.zero_grad()
             loss.backward()
             if args.grad_clip > 0.0:
@@ -322,9 +369,9 @@ def train_speech_auto(args):
             mel_input, mel = mel_input.to(DEVICE), mel.to(DEVICE)
             pred, stop_pred = model.forward(mel, mel_input)
 
-            
+
             pred_loss = F.mse_loss(pred, mel)
-            # Should be [batch_size x seq_length] for stop 
+            # Should be [batch_size x seq_length] for stop
 
             # TODO: return actual lengths, not just computed off padding
             # currently, find first nonzero (so pad_idx) in pos_mel, or set to length
@@ -332,7 +379,7 @@ def train_speech_auto(args):
             end_mask_idx[end_mask_max == 0] = pos_mel.shape[1] - 1
             stop_label = F.one_hot(end_mask_idx, pos_mel.shape[1]).float()
             stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
-            
+
             loss = pred_loss + stop_loss
             optimizer.zero_grad()
             loss.backward()
