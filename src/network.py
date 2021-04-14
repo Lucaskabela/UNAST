@@ -1,5 +1,5 @@
 '''
-Contains the code for the encoder & decoders, which are composed of modules.  
+Contains the code for the encoder & decoders, which are composed of modules.
 These modules are pre, encoder, a decoder, a post, and optional discriminator.
     - BiRNN encoder/decoder for text and speech (with attention (?))
     - Transformer encoder/decoder for text and speech
@@ -14,7 +14,7 @@ class AutoEncoderNet(nn.Module):
     # Speech net will use speech prenet/postnet, similarly with text
     def __init__(self):
         super(AutoEncoderNet, self).__init__()
-    
+
     # TODO: Need more input for padded sequences?
     def preprocess(self, raw_input_tensor):
         '''
@@ -22,29 +22,29 @@ class AutoEncoderNet(nn.Module):
 
         Args:
             - raw_input_tensor: a tensor of shape [batch_size x seq_len x dim]
-                + For text, dim will be 1 and tensor type will be Long, 
+                + For text, dim will be 1 and tensor type will be Long,
                   corresponding to the indices for phoneme embeddings
                 + For speech, dim will be the ???
-        
+
         Returns:
             - input_tensor: a tensor of shape [batch_size x seq_len x hidden_dim]
                 where hidden dim is the expected input shape of the encoder
-            - pad_mask: a tensor of shape [batch_size x seq_len] with 1s for padded 
+            - pad_mask: a tensor of shape [batch_size x seq_len] with 1s for padded
                 indices and 0 for everything else
         '''
         raise Exception("Please use a subclass for text or speech")
 
     def encode(self, raw_input_tensor):
         '''
-        Encodes raw input using the prenet & encoder, returning latent vector & 
+        Encodes raw input using the prenet & encoder, returning latent vector &
         necessary components for attention
 
         Args:
             - raw_input_tensor: a tensor of shape [batch_size x seq_len x dim]
-                + For text, dim will be 1 and tensor type will be Long, 
+                + For text, dim will be 1 and tensor type will be Long,
                   corresponding to the indices for phoneme embeddings
                 + For speech, dim will be the ???
-        
+
         Returns:
             Depends on subclass
         '''
@@ -52,7 +52,7 @@ class AutoEncoderNet(nn.Module):
 
     def decode(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
         '''
-        Decodes a latent_tensor using the decoder & postnet, returning output for 
+        Decodes a latent_tensor using the decoder & postnet, returning output for
         evaluation
 
         Args:
@@ -60,10 +60,10 @@ class AutoEncoderNet(nn.Module):
             - attention_stuff: any variables needed for computing attention
             - teacher_sequence: a tensor of shape [batch_size x teacher_len x 1]
                 which is of type Long.  Contains info needed for seq2seq decoding
-        
+
         Returns:
             - output_tensor: a tensor of shape [batch_size x teacher_len x dim]
-                + For text, dim will be #phonemes which is a distribution over 
+                + For text, dim will be #phonemes which is a distribution over
                     phonemes
                 + For speech, dim will be the ??? which is something log filter related
         '''
@@ -78,9 +78,9 @@ class AutoEncoderNet(nn.Module):
                 which is the raw output of the network
         Returns:
             - output_tensor: a tensor of shape [batch_size x teacher_len x res_dim]
-                + For text, res_dim will be #phonemes which is a distribution over 
+                + For text, res_dim will be #phonemes which is a distribution over
                     phonemes
-                + For speech, res_dim will be the ??? which is something log filter related 
+                + For speech, res_dim will be the ??? which is something log filter related
         '''
         raise Exception("Please use a subclass for text or speech")
 
@@ -94,7 +94,7 @@ class UNAST(nn.Module):
 
     def text_ae(self, character_input):
         return self.text_m.forward(character_input, noise_in=True)
-    
+
     def speech_ae(self, mel, mel_input):
         return self.speech_m.forward(mel, mel_input, noise_in=True)
 
@@ -111,7 +111,7 @@ class UNAST(nn.Module):
         cm_t_e_o, cm_t_hid, cm_t_pad_mask = text_m.encode(text_pred)
         pred, stop_pred = speech_m.decode_sequence(mel_input, cm_t_hid, cm_t_e_o, cm_t_pad_mask)
         return pred, stop_pred
-    
+
     def tts(self, character, mel_input, infer=False):
         t_e_o, t_hid, t_pad_mask = text_m.encode(character)
         if not infer:
@@ -129,7 +129,7 @@ class UNAST(nn.Module):
         return text_pred
 
 class Discriminator(nn.Module):
-    # TODO: Fill in with linear layers :) 
+    # TODO: Fill in with linear layers :)
     def __init__(self, enc_dim, hidden, out_classes=2, dropout=.2):
         super(Discriminator, self).__init__()
         self.fc1 = nn.Linear(enc_dim, hidden)
@@ -142,7 +142,7 @@ class Discriminator(nn.Module):
         temp = self.dropout(self.non_linear(self.fc1(enc_output)))
         temp2 = self.dropout(self.non_linear(self.fc2(temp)))
         return self.fc3(temp2)
-    
+
 class SpeechTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
     def __init__(self, args):
@@ -154,19 +154,19 @@ class SpeechRNN(AutoEncoderNet):
     def __init__(self, args):
         super(SpeechRNN, self).__init__()
         self.prenet = SpeechPrenet(args.num_mels, args.hidden, args.e_in)
-        self.encoder = RNNEncoder(args.e_in, args.hidden, args.e_out, 
+        self.encoder = RNNEncoder(args.e_in, args.hidden, args.e_out,
             dropout=args.e_p, num_layers=args.e_layers, bidirectional=args.e_bi)
-        self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.num_mels, 
+        self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.num_mels,
             dropout=args.d_p, num_layers=args.d_layers, attention=args.d_attn)
         self.postnet = SpeechPostnet(args.num_mels, args.hidden)
-    
+
 
     def preprocess(self, raw_input_tensor):
         # raw_input_tensor should be a LongTensor of size [batch_size x seq_len x 1]
         # should already be padded as well
         # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
         # NOTE: I do not think this is correct for mel... but check if all are padding in num_mels
-        pad_mask = torch.all(raw_input_tensor.eq(PAD_IDX), dim=-1).float().squeeze() 
+        pad_mask = torch.all(raw_input_tensor.eq(PAD_IDX), dim=-1).float().squeeze()
         return self.prenet(raw_input_tensor), pad_mask
 
     def encode(self, raw_input_tensor, noise_in=False):
@@ -174,10 +174,10 @@ class SpeechRNN(AutoEncoderNet):
         Returns:
             - output: a tensor of shape [batch_size x seq_len x latent_dim], which
                 is the projected hidden state from each timestep in the sequence
-            - h_t: the (h_n, c_n) pair from the last timestep of the network.  
+            - h_t: the (h_n, c_n) pair from the last timestep of the network.
                 Dimension varies depending on num_layers, but should
                 be proportional to  [num_layers, batch, hidden_size]
-            - pad_mask: a tensor of shape [batch_size x seq_len] with 1s for padded 
+            - pad_mask: a tensor of shape [batch_size x seq_len] with 1s for padded
                 indices and 0 for everything else
         """
         mel_features, pad_mask = self.preprocess(raw_input_tensor)
@@ -192,7 +192,7 @@ class SpeechRNN(AutoEncoderNet):
         outputs = []
         stops = []
         stop_lens = torch.zeros(batch_size, device=enc_output.device)
-        
+
         # get a all 0 frame for first timestep
         input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
         i = 0
@@ -241,11 +241,11 @@ class SpeechRNN(AutoEncoderNet):
 
     def decode(self, input_, hidden_state, enc_output, enc_ctxt_mask):
         """
-        NOTE: input_ should be [batch_size x 1 x num_mels] as this is autoregressive 
+        NOTE: input_ should be [batch_size x 1 x num_mels] as this is autoregressive
             decoding (seq2seq).
         Returns:
             - dec_output: a tensor of shape [batch_size x 1 x num_mels]
-                + For text, dim will be #phonemes which is a distribution over 
+                + For text, dim will be #phonemes which is a distribution over
                     phonemes (needs to be log_softmaxed!)
                 + For speech, dim will be the ??? which is something log filter related
             - dec_hidden: (h_n, c_n) from decoder LSTM
@@ -261,7 +261,7 @@ class SpeechRNN(AutoEncoderNet):
         encoder_outputs, latent_hidden, pad_mask = self.encode(input_, noise_in=noise_in)
         pred, stop_pred = self.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
         return pred, stop_pred
-        
+
 class TextTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
     def __init__(self, args):
@@ -273,9 +273,9 @@ class TextRNN(AutoEncoderNet):
     def __init__(self, args):
         super(TextRNN, self).__init__()
         self.prenet = TextPrenet(args.embed_dim, args.e_in)
-        self.encoder = RNNEncoder(args.e_in, args.hidden, args.e_out, 
+        self.encoder = RNNEncoder(args.e_in, args.hidden, args.e_out,
             dropout=args.e_p, num_layers=args.e_layers, bidirectional=args.e_bi)
-        self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.d_out, 
+        self.decoder = RNNDecoder(args.e_out, args.d_in, args.hidden, args.d_out,
             dropout=args.d_p, num_layers=args.d_layers, attention=args.d_attn)
         self.postnet = TextPostnet(args.d_out, args.hidden)
 
@@ -283,7 +283,7 @@ class TextRNN(AutoEncoderNet):
         # raw_input_tensor should be a LongTensor of size [batch_size x seq_len x 1]
         # should already be padded as well
         # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
-        pad_mask = raw_input_tensor.eq(PAD_IDX).float().squeeze() 
+        pad_mask = raw_input_tensor.eq(PAD_IDX).float().squeeze()
         return self.prenet(raw_input_tensor), pad_mask
 
     def encode(self, raw_input_tensor, noise_in=False):
@@ -291,10 +291,10 @@ class TextRNN(AutoEncoderNet):
         Returns:
             - output: a tensor of shape [batch_size x seq_len x latent_dim], which
                 is the projected hidden state from each timestep in the sequence
-            - h_t: the (h_n, c_n) pair from the last timestep of the network.  
+            - h_t: the (h_n, c_n) pair from the last timestep of the network.
                 Dimension varies depending on num_layers, but should
                 be proportional to  [num_layers, batch, hidden_size]
-            - pad_mask: a tensor of shape [batch_size x seq_len] with 1s for padded 
+            - pad_mask: a tensor of shape [batch_size x seq_len] with 1s for padded
                 indices and 0 for everything else
         """
         embedded_phonemes, pad_mask = self.preprocess(raw_input_tensor)
@@ -322,11 +322,11 @@ class TextRNN(AutoEncoderNet):
 
     def decode(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
         """
-        NOTE: embed_deode should be [batch_size x 1 x d_in] as this is autoregressive 
+        NOTE: embed_deode should be [batch_size x 1 x d_in] as this is autoregressive
             decoding (seq2seq).
         Returns:
             - dec_output: a tensor of shape [batch_size x teacher_len x dim]
-                + For text, dim will be #phonemes which is a distribution over 
+                + For text, dim will be #phonemes which is a distribution over
                     phonemes (needs to be log_softmaxed!)
                 + For speech, dim will be the ??? which is something log filter related
             - dec_hidden: (h_n, c_n) from decoder LSTM
@@ -335,7 +335,7 @@ class TextRNN(AutoEncoderNet):
         return self.postprocess(dec_output), dec_hidden
 
     def postprocess(self, dec_output, distrib=False):
-        
+
         final_out = self.postnet(dec_output)
         if distrib:
             # If we want to return distribution, take log softmax!
@@ -348,7 +348,7 @@ class TextRNN(AutoEncoderNet):
         batch_size = enc_output.shape[0]
         outputs = []
         seq_lens = torch.zeros(batch_size, device=enc_output.device)
-        
+
         # get a all 0 frame for first timestep
         input_ = torch.from_numpy(np.asarray([SOS_IDX for i in range(0, batch_size)]), device=enc_output.device)
         i = 0
