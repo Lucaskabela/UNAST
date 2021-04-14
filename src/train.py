@@ -26,32 +26,29 @@ class BatchGetter():
         self.batch_size = args.batch_size
         self.num_workers = args.num_workers
 
-        self.supervised_dataset = supervised_dataset
-        self.supervised_iter = iter(DataLoader(unsupervised_dataset,
+        self.supervised_dataloader = DataLoader(supervised_dataset,
             batch_size=self.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=self.num_workers))
+            num_workers=self.num_workers)
+        self.supervised_iter = iter(self.supervised_dataloader)
 
-        self.unsupervised_dataset = unsupervised_dataset
-        self.unsupervised_iter = iter(DataLoader(unsupervised_dataset,
+        self.unsupervised_dataloader = DataLoader(unsupervised_dataset,
             batch_size=self.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=self.num_workers))
+            num_workers=self.num_workers)
+        self.unsupervised_iter = iter(self.unsupervised_dataloader)
 
-        self.discriminator_dataset = full_dataset
-        self.discriminator_iter = iter(DataLoader(full_dataset,
+        self.discriminator_dataloader = DataLoader(full_dataset,
             batch_size=self.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=self.num_workers))
+            num_workers=self.num_workers)
+        self.discriminator_iter = iter(self.discriminator_dataloader)
 
     def get_supervised_batch(self):
         try:
             batch = self.supervised_iter.next()
         except StopIteration:
-            self.supervised_iter = iter(DataLoader(
-                self.supervised_dataset,
-                batch_size=self.batch_size, shuffle=True, collate_fn=collate_fn_transformer,
-                drop_last=True, num_workers=self.num_workers))
+            self.supervised_iter = iter(self.supervised_dataloader)
             batch = self.supervised_iter.next()
         return batch
 
@@ -59,10 +56,7 @@ class BatchGetter():
         try:
             batch = self.unsupervised_iter.next()
         except StopIteration:
-            self.unsupervised_iter = iter(DataLoader(
-                self.unsupervised_dataset,
-                batch_size=self.batch_size, shuffle=True, collate_fn=collate_fn_transformer,
-                drop_last=True, num_workers=self.num_workers))
+            self.unsupervised_iter = iter(self.unsupervised_dataloader)
             batch = self.unsupervised_iter.next()
         return batch
 
@@ -70,10 +64,7 @@ class BatchGetter():
         try:
             batch = self.discriminator_iter.next()
         except StopIteration:
-            self.discriminator_iter = iter(DataLoader(
-                self.discriminator_dataset,
-                batch_size=self.batch_size, shuffle=True, collate_fn=collate_fn_transformer,
-                drop_last=True, num_workers=self.num_workers))
+            self.discriminator_iter = iter(self.discriminator_dataloader)
             batch = self.discriminator_iter.next()
         return batch
 
