@@ -129,19 +129,22 @@ class UNAST(nn.Module):
         return text_pred
 
 class Discriminator(nn.Module):
-    # TODO: Fill in with linear layers :)
-    def __init__(self, enc_dim, hidden, out_classes=2, dropout=.2):
+    # From Lample et al.
+    # "3 hidden layers, 1024 hidden layers, smoothing coefficient 0.1"
+    def __init__(self, enc_dim, hidden=1024, out_classes=2, dropout=.2, relu=.2):
         super(Discriminator, self).__init__()
         self.fc1 = nn.Linear(enc_dim, hidden)
         self.fc2 = nn.Linear(hidden, hidden)
-        self.fc3 = nn.Linear(hidden, out_classes)
+        self.fc3 = nn.Linear(hidden, hidden)
+        self.fc4 = nn.Linear(hidden, out_classes)
         self.dropout = nn.Dropout(p=dropout)
-        self.non_linear = nn.LeakyRelu(.2)
+        self.non_linear = nn.LeakyReLU(relu)
 
     def forward(self, enc_output):
         temp = self.dropout(self.non_linear(self.fc1(enc_output)))
         temp2 = self.dropout(self.non_linear(self.fc2(temp)))
-        return self.fc3(temp2)
+        temp3 = self.dropout(self.non_linear(self.fc3(temp2)))
+        return self.fc4(temp3)
 
 class SpeechTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec

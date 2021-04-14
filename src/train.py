@@ -8,7 +8,7 @@ Contains the code for training the encoder/decoders, including:
 from utils import set_seed, parse_with_config, PAD_IDX, init_device, compute_per
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
-from network import TextRNN, SpeechRNN
+from network import TextRNN, SpeechRNN, Discriminator
 from tqdm import tqdm
 import audio_parameters as ap
 import argparse
@@ -423,8 +423,7 @@ def initialize_model(args):
             pass
 
         if args.use_discriminator:
-            # TODO: Fill it in
-            pass
+            discriminator = Discriminator(args.hidden).to(DEVICE)
         model = UNAST(text_m, speech_m, discriminator)
 
         # initialize optimizer
