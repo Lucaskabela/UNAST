@@ -8,7 +8,7 @@ Contains the code for training the encoder/decoders, including:
 from utils import set_seed, parse_with_config, PAD_IDX, init_device, compute_per
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
-from network import TextRNN, SpeechRNN
+from network import TextRNN, SpeechRNN, UNAST
 from tqdm import tqdm
 import audio_parameters as ap
 import argparse
@@ -109,7 +109,7 @@ def optimizer_step(loss, model, optimizer, args):
     return loss.detach().cpu().item()
 
 def train_sp_step(losses, model, optimizer, batch, args):
-    asr_loss, tts_loss = supervised_step(model, supervised_batch)
+    asr_loss, tts_loss = supervised_step(model, batch)
     loss = tts_loss + asr_loss
 
     # Take a optimizer and append losses here!
@@ -139,7 +139,7 @@ def train_cm_step(losses, model, optimizer, batch, args):
 
     # Do speech!
     pred, stop_pred = model.cm_speech_in(mel, mel_input)
-    s_cm_loss = speech_loss(gold_mel, stop_label, pred, stop_pred)
+    s_cm_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
     optimizer_step(s_cm_loss, model, optimizer, args)
 
     # Now do text!
@@ -232,7 +232,7 @@ def train(args):
             if epoch_step % 3 == 2:
                 train_cm_step(losses, model, optimizer, unsupervised_batch, args)
 
-        if args.train_discriminator:
+        if args.use_discriminator:
             # TODO: Train discriminator
             pass
 
@@ -253,8 +253,8 @@ def log_loss_metrics(losses, epoch, eval=False):
         kind = "Eval_"
 
     out_str = "{} epoch {:-3d} \t".format(kind, epoch)
-    for key_, loss in enumerate(losses):
-        out_str += "{} loss =  {:0.3f} \t".format(key, np.avg(loss))
+    for key_, loss in losses.items():
+        out_str += "{} loss =  {:0.3f} \t".format(key_, np.mean(loss))
     print(out_str)
     # TODO: Add tensorboard logging ?
 
@@ -386,6 +386,8 @@ def initialize_datasets(args):
     unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
     val_dataset = get_dataset('val.csv')
     full_train_dataset = get_dataset('full_train.csv')
+    return supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
