@@ -5,10 +5,10 @@ Contains the code for training the encoder/decoders, including:
     - Denoising loss
     - Discriminator loss
 '''
-from utils import set_seed, parse_with_config, PAD_IDX, init_device, compute_per
+from utils import *
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
-from network import TextRNN, SpeechRNN, Discriminator
+from network import TextRNN, SpeechRNN, UNAST, Discriminator
 from tqdm import tqdm
 import audio_parameters as ap
 import argparse
@@ -26,32 +26,29 @@ class BatchGetter():
         self.batch_size = args.batch_size
         self.num_workers = args.num_workers
 
-        self.supervised_dataset = supervised_dataset
-        self.supervised_iter = iter(DataLoader(unsupervised_dataset,
+        self.supervised_dataloader = DataLoader(supervised_dataset,
             batch_size=self.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=self.num_workers))
+            num_workers=self.num_workers)
+        self.supervised_iter = iter(self.supervised_dataloader)
 
-        self.unsupervised_dataset = unsupervised_dataset
-        self.unsupervised_iter = iter(DataLoader(unsupervised_dataset,
+        self.unsupervised_dataloader = DataLoader(unsupervised_dataset,
             batch_size=self.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=self.num_workers))
+            num_workers=self.num_workers)
+        self.unsupervised_iter = iter(self.unsupervised_dataloader)
 
-        self.discriminator_dataset = full_dataset
-        self.discriminator_iter = iter(DataLoader(full_dataset,
+        self.discriminator_dataloader = DataLoader(full_dataset,
             batch_size=self.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=self.num_workers))
+            num_workers=self.num_workers)
+        self.discriminator_iter = iter(self.discriminator_dataloader)
 
     def get_supervised_batch(self):
         try:
             batch = self.supervised_iter.next()
         except StopIteration:
-            self.supervised_iter = iter(DataLoader(
-                self.supervised_dataset,
-                batch_size=self.batch_size, shuffle=True, collate_fn=collate_fn_transformer,
-                drop_last=True, num_workers=self.num_workers))
+            self.supervised_iter = iter(self.supervised_dataloader)
             batch = self.supervised_iter.next()
         return batch
 
@@ -59,10 +56,7 @@ class BatchGetter():
         try:
             batch = self.unsupervised_iter.next()
         except StopIteration:
-            self.unsupervised_iter = iter(DataLoader(
-                self.unsupervised_dataset,
-                batch_size=self.batch_size, shuffle=True, collate_fn=collate_fn_transformer,
-                drop_last=True, num_workers=self.num_workers))
+            self.unsupervised_iter = iter(self.unsupervised_dataloader)
             batch = self.unsupervised_iter.next()
         return batch
 
@@ -70,10 +64,7 @@ class BatchGetter():
         try:
             batch = self.discriminator_iter.next()
         except StopIteration:
-            self.discriminator_iter = iter(DataLoader(
-                self.discriminator_dataset,
-                batch_size=self.batch_size, shuffle=True, collate_fn=collate_fn_transformer,
-                drop_last=True, num_workers=self.num_workers))
+            self.discriminator_iter = iter(self.discriminator_dataloader)
             batch = self.discriminator_iter.next()
         return batch
 
@@ -230,7 +221,7 @@ def optimizer_step(loss, model, optimizer, args):
     return loss.detach().cpu().item()
 
 def train_sp_step(losses, model, optimizer, batch, args):
-    asr_loss, tts_loss = supervised_step(model, supervised_batch)
+    asr_loss, tts_loss = supervised_step(model, batch)
     loss = tts_loss + asr_loss
 
     # Take a optimizer and append losses here!
@@ -260,7 +251,7 @@ def train_cm_step(losses, model, optimizer, batch, args):
 
     # Do speech!
     pred, stop_pred = model.cm_speech_in(mel, mel_input)
-    s_cm_loss = speech_loss(gold_mel, stop_label, pred, stop_pred)
+    s_cm_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
     optimizer_step(s_cm_loss, model, optimizer, args)
 
     # Now do text!
@@ -287,7 +278,7 @@ def train_discriminator_step(losses, model, optimizer, batch, args):
 
 
 #####----- Train and evaluate -----#####
-def evaluate(model, valid_dataset):
+def evaluate(model, valid_dataloader):
     """
         Expect validation set to have paired speech & text!
         Primary evaluation is PER - can gauge training by the other losses
@@ -299,7 +290,7 @@ def evaluate(model, valid_dataset):
         losses = defaultdict(list)
         per, n_iters = 0, 0
 
-        for batch in valid_dataset:
+        for batch in valid_dataloader:
             character, mel, mel_input, pos_text, pos_mel, text_len = batch
 
             t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
@@ -316,8 +307,7 @@ def evaluate(model, valid_dataset):
 
             text_pred = model.asr(None, mel.to(DEVICE), infer=True).squeeze()
             len_mask_max, len_mask_idx = torch.max((text_pred == PAD_IDX), dim=1)
-            len_mask_idx[end_mask_max == 0] = text_pred.shape[1] - 1
-            print("Lengths", len_mask_idx.shape)
+            len_mask_idx[len_mask_max == 0] = text_pred.shape[1] - 1
             per += compute_per(character.to(DEVICE), text_pred, text_len.to(DEVICE), len_mask_idx)
             n_iters += 1
     # TODO: evaluate speech inference somehow?
@@ -327,6 +317,10 @@ def train(args):
     set_seed(args.seed)
     supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset = \
         initialize_datasets(args)
+    valid_dataloader = DataLoader(val_dataset,
+            batch_size=args.batch_size, shuffle=True,
+            collate_fn=collate_fn_transformer, drop_last=True,
+            num_workers=args.num_workers)
     s_epoch, best, model, optimizer = initialize_model(args)
 
     for epoch in range(s_epoch, args.epochs):
@@ -364,17 +358,17 @@ def train(args):
                 train_sp_step(losses, model, optimizer, batch, args)
 
             # DISCRIMINATOR
-            if args.train_discriminator:
+            if args.use_discriminator:
                 for _ in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
                     # TODO: Train discriminator
 
         # Eval and save
         log_loss_metrics(losses, epoch)
-        per, eval_losses = evaluate(model, valid_dataset)
+        per, eval_losses = evaluate(model, valid_dataloader)
         log_loss_metrics(eval_losses, epoch, eval=True)
         if per < best:
-            print("Saving model! with PER {}\%".format(per))
+            print("Saving model! with PER {:0.3f}\%".format(per*100))
             best = per
             save_ckp(epoch, per, model, optimizer, True, args.checkpoint_path)
     model.eval()
@@ -386,9 +380,10 @@ def log_loss_metrics(losses, epoch, eval=False):
         kind = "Eval_"
 
     out_str = "{} epoch {:-3d} \t".format(kind, epoch)
-    for key_, loss in enumerate(losses):
-        out_str += "{} loss =  {:0.3f} \t".format(key, np.avg(loss))
+    for key_, loss in sorted(losses.items()):
+        out_str += "{} loss =  {:0.3f} \t".format(key_, np.mean(loss))
     print(out_str)
+
     # TODO: Add tensorboard logging ?
 
 def train_text_auto(args):
@@ -518,6 +513,14 @@ def initialize_datasets(args):
     unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
     val_dataset = get_dataset('val.csv')
     full_train_dataset = get_dataset('full_train.csv')
+    ## For testing
+    # test_size = 100
+    # supervised_train_dataset = torch.utils.data.Subset(supervised_train_dataset, range(test_size))
+    # unsupervised_train_dataset = torch.utils.data.Subset(unsupervised_train_dataset, range(test_size))
+    # val_dataset = torch.utils.data.Subset(val_dataset, range(test_size))
+    # full_train_dataset = torch.utils.data.Subset(full_train_dataset, range(test_size))
+    return supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

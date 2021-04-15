@@ -11,6 +11,8 @@ import sys
 import torch.utils.tensorboard as tb
 import shutil
 from jiwer import wer
+from data import sequence_to_text
+import os
 
 PAD_IDX = 0
 SOS_IDX = 1
@@ -24,8 +26,9 @@ def compute_per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengt
     gt_sents = []
     hyp_sents = []
     for b in range(ground_truth.shape[0]):
-        gt_sents.append(' '.join(ground_truth[b][:].tolist()[:ground_truth_lengths[b]]))
-        hyp_sents.append(' '.join(hypothesis[b][:].tolist()[:hypothesis_lengths[b]]))
+        gt_sents.append(sequence_to_text(ground_truth[b][:].tolist()[:ground_truth_lengths[b]]))
+        hyp_sents.append(sequence_to_text(hypothesis[b][:].tolist()[:hypothesis_lengths[b]]))
+        
     return wer(gt_sents, hyp_sents)
 
 
@@ -45,8 +48,9 @@ def sent_lens_to_mask(lens, max_length):
     """
     lens should be tensor of dim [batch_size]
     """
-    return torch.from_numpy(np.asarray([[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] for i in range(0, lens.shape[0])]), 
-        device=lens.device)
+    m = [[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] 
+        for i in range(0, lens.shape[0])]
+    return torch.FloatTensor(m, device=lens.device)
 
 def set_seed(seed):
     '''
@@ -89,6 +93,10 @@ def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):
     checkpoint_path: path to save checkpoint
     best_model_path: path to save best model
     """
+    ckpt_directory = os.path.dirname(checkpoint_path)
+    if not os.path.exists(ckpt_directory):
+        os.makedirs(ckpt_directory)
+
     state = {
         'epoch': epoch + 1,
         'valid_loss_min': valid_loss,
