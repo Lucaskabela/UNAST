@@ -230,7 +230,7 @@ def evaluate(model, valid_dataloader):
 
             text_pred = model.asr(None, mel.to(DEVICE), infer=True).squeeze()
             len_mask_max, len_mask_idx = torch.max((text_pred == PAD_IDX), dim=1)
-            len_mask_idx[len_mask_idx == 0] = text_pred.shape[1] - 1
+            len_mask_idx[len_mask_max == 0] = text_pred.shape[1] - 1
             print("Lengths", len_mask_idx.shape)
             per += compute_per(character.to(DEVICE), text_pred, text_len.to(DEVICE), len_mask_idx)
             n_iters += 1

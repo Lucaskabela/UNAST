@@ -200,7 +200,7 @@ class SpeechRNN(AutoEncoderNet):
         keep_gen = torch.any(stop_lens.eq(0)) and i < max_len
 
         while keep_gen:
-            dec_out, stop_pred, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
+            (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             stop_pred = stop_pred.squeeze()
             stops.append(stop_pred)
             # set stop_lens here!
