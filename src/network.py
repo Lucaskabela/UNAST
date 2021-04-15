@@ -205,7 +205,7 @@ class SpeechRNN(AutoEncoderNet):
             stops.append(stop_pred)
             # set stop_lens here!
             outputs.append(dec_out)
-            input_ = outputs[-1].permute(0, 2, 1)
+            input_ = outputs[-1].detach().permute(0, 2, 1)
             i += 1
 
             # double check this!
@@ -218,8 +218,8 @@ class SpeechRNN(AutoEncoderNet):
         pad_mask = sent_lens_to_mask(stop_lens, len(outputs))
 
         res, res_stop = torch.stack(outputs, dim=1).squeeze(), torch.stack(stops, dim=1).squeeze()
-        res = res.masked_fill(pad_mask.unsqueeze(-1), PAD_IDX)
-        res_stop = res_stop.masked_fill(pad_mask, PAD_IDX)
+        res = res * pad_mask.unsqueeze(-1)
+        res_stop = res_stop * pad_mask
         return res, res_stop
 
     def decode_sequence(self, target, hidden_state, enc_output, enc_ctxt_mask, teacher_ratio=1):
@@ -238,7 +238,7 @@ class SpeechRNN(AutoEncoderNet):
             if random.random() < teacher_ratio and i + 1 < max_out_len:
                 input_ = target[:, i+1, :].unsqueeze(1)
             else:
-                input_ = outputs[-1]
+                input_ = outputs[-1].detach().permute(0, 2, 1)
         return torch.stack(outputs, dim=1).squeeze(), torch.stack(stops, dim=1).squeeze()
 
     def decode(self, input_, hidden_state, enc_output, enc_ctxt_mask):
@@ -375,7 +375,7 @@ class TextRNN(AutoEncoderNet):
         pad_mask = sent_lens_to_mask(seq_lens, len(outputs))
 
         res = torch.stack(outputs, dim=1).squeeze(2)
-        res = res.masked_fill(pad_mask, PAD_IDX)
+        res = res * pad_mask
         return res
 
     def forward(self, input_, noise_in=False):

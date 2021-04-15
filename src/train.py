@@ -5,7 +5,7 @@ Contains the code for training the encoder/decoders, including:
     - Denoising loss
     - Discriminator loss
 '''
-from utils import set_seed, parse_with_config, PAD_IDX, init_device, compute_per
+from utils import *
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
 from network import TextRNN, SpeechRNN, UNAST
@@ -201,7 +201,7 @@ def train_cm_step(losses, model, optimizer, batch, args):
 
 
 #####----- Train and evaluate -----#####
-def evaluate(model, valid_dataset):
+def evaluate(model, valid_dataloader):
     """
         Expect validation set to have paired speech & text!
         Primary evaluation is PER - can gauge training by the other losses
@@ -213,7 +213,7 @@ def evaluate(model, valid_dataset):
         losses = defaultdict(list)
         per, n_iters = 0, 0
 
-        for batch in valid_dataset:
+        for batch in valid_dataloader:
             character, mel, mel_input, pos_text, pos_mel, text_len = batch
 
             t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
@@ -230,7 +230,7 @@ def evaluate(model, valid_dataset):
 
             text_pred = model.asr(None, mel.to(DEVICE), infer=True).squeeze()
             len_mask_max, len_mask_idx = torch.max((text_pred == PAD_IDX), dim=1)
-            len_mask_idx[end_mask_max == 0] = text_pred.shape[1] - 1
+            len_mask_idx[len_mask_idx == 0] = text_pred.shape[1] - 1
             print("Lengths", len_mask_idx.shape)
             per += compute_per(character.to(DEVICE), text_pred, text_len.to(DEVICE), len_mask_idx)
             n_iters += 1
@@ -241,6 +241,10 @@ def train(args):
     set_seed(args.seed)
     supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset = \
         initialize_datasets(args)
+    valid_dataloader = DataLoader(val_dataset,
+            batch_size=self.batch_size, shuffle=True,
+            collate_fn=collate_fn_transformer, drop_last=True,
+            num_workers=self.num_workers)
     s_epoch, best, model, optimizer = initialize_model(args)
 
     for epoch in range(s_epoch, args.epochs):
@@ -285,7 +289,7 @@ def train(args):
 
         # Eval and save
         log_loss_metrics(losses, epoch)
-        per, eval_losses = evaluate(model, valid_dataset)
+        per, eval_losses = evaluate(model, valid_dataloader)
         log_loss_metrics(eval_losses, epoch, eval=True)
         if per < best:
             print("Saving model! with PER {}\%".format(per))

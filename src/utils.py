@@ -11,6 +11,7 @@ import sys
 import torch.utils.tensorboard as tb
 import shutil
 from jiwer import wer
+from data import sequence_to_text
 
 PAD_IDX = 0
 SOS_IDX = 1
@@ -24,8 +25,9 @@ def compute_per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengt
     gt_sents = []
     hyp_sents = []
     for b in range(ground_truth.shape[0]):
-        gt_sents.append(' '.join(ground_truth[b][:].tolist()[:ground_truth_lengths[b]]))
-        hyp_sents.append(' '.join(hypothesis[b][:].tolist()[:hypothesis_lengths[b]]))
+        gt_sents.append(sequence_to_text(ground_truth[b][:].tolist()[:ground_truth_lengths[b]]))
+        hyp_sents.append(sequence_to_text(hypothesis[b][:].tolist()[:hypothesis_lengths[b]]))
+
     return wer(gt_sents, hyp_sents)
 
 
