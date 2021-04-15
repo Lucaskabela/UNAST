@@ -231,7 +231,6 @@ def evaluate(model, valid_dataloader):
             text_pred = model.asr(None, mel.to(DEVICE), infer=True).squeeze()
             len_mask_max, len_mask_idx = torch.max((text_pred == PAD_IDX), dim=1)
             len_mask_idx[len_mask_max == 0] = text_pred.shape[1] - 1
-            print("Lengths", len_mask_idx.shape)
             per += compute_per(character.to(DEVICE), text_pred, text_len.to(DEVICE), len_mask_idx)
             n_iters += 1
     # TODO: evaluate speech inference somehow?
@@ -242,9 +241,9 @@ def train(args):
     supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset = \
         initialize_datasets(args)
     valid_dataloader = DataLoader(val_dataset,
-            batch_size=self.batch_size, shuffle=True,
+            batch_size=args.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=self.num_workers)
+            num_workers=args.num_workers)
     s_epoch, best, model, optimizer = initialize_model(args)
 
     for epoch in range(s_epoch, args.epochs):
@@ -282,7 +281,7 @@ def train(args):
                 train_sp_step(losses, model, optimizer, batch, args)
 
             # DISCRIMINATOR
-            if args.train_discriminator:
+            if args.use_discriminator:
                 for _ in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
                     # TODO: Train discriminator
@@ -292,7 +291,7 @@ def train(args):
         per, eval_losses = evaluate(model, valid_dataloader)
         log_loss_metrics(eval_losses, epoch, eval=True)
         if per < best:
-            print("Saving model! with PER {}\%".format(per))
+            print("Saving model! with PER {:0.3f}\%".format(per*100))
             best = per
             save_ckp(epoch, per, model, optimizer, True, args.checkpoint_path)
     model.eval()
@@ -304,9 +303,10 @@ def log_loss_metrics(losses, epoch, eval=False):
         kind = "Eval_"
 
     out_str = "{} epoch {:-3d} \t".format(kind, epoch)
-    for key_, loss in losses.items():
+    for key_, loss in sorted(losses.items()):
         out_str += "{} loss =  {:0.3f} \t".format(key_, np.mean(loss))
     print(out_str)
+
     # TODO: Add tensorboard logging ?
 
 def train_text_auto(args):
@@ -437,6 +437,12 @@ def initialize_datasets(args):
     unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
     val_dataset = get_dataset('val.csv')
     full_train_dataset = get_dataset('full_train.csv')
+    ## For testing
+    # test_size = 100
+    # supervised_train_dataset = torch.utils.data.Subset(supervised_train_dataset, range(test_size))
+    # unsupervised_train_dataset = torch.utils.data.Subset(unsupervised_train_dataset, range(test_size))
+    # val_dataset = torch.utils.data.Subset(val_dataset, range(test_size))
+    # full_train_dataset = torch.utils.data.Subset(full_train_dataset, range(test_size))
     return supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset
 
 

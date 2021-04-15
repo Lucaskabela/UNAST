@@ -375,7 +375,7 @@ class TextRNN(AutoEncoderNet):
         pad_mask = sent_lens_to_mask(seq_lens, len(outputs))
 
         res = torch.stack(outputs, dim=1).squeeze(2)
-        res = res * pad_mask
+        res = res.masked_fill(pad_mask, PAD_IDX)
         return res
 
     def forward(self, input_, noise_in=False):
