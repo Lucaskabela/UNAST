@@ -146,7 +146,7 @@ def discriminator_target(output, target_type, smoothing=0.1):
 
 
 #####----- Use these to run a task on a batch ----#####
-def autoencoder_step(model, batch):
+def autoencoder_step(model, batch, use_dis_loss=False):
     """
     Compute and return the loss for autoencoders
     """
@@ -154,11 +154,21 @@ def autoencoder_step(model, batch):
     character, mel, mel_input, _  = x
     gold_char, gold_mel, gold_stop = y
 
-    text_pred = model.text_ae(character).permute(1, 2, 0)
-    pred, stop_pred = model.speech_ae(mel, mel_input)
+    if use_dis_loss:
+        text_pred, t_hid = model.text_ae(character, use_dis_loss)
+        text_pred = text_pred.permute(1, 2, 0)
+        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech')
+
+        pred, stop_pred, s_hid = model.speech_ae(mel, mel_input, use_dis_loss)
+        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text')
+    else:
+        text_pred = model.text_ae(character).permute(1, 2, 0)
+        pred, stop_pred = model.speech_ae(mel, mel_input)
 
     s_ae_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
     t_ae_loss = text_loss(gold_char, text_pred)
+    if use_dis_loss:
+        return t_ae_loss, s_ae_loss, t_d_loss, s_d_loss
     return t_ae_loss, s_ae_loss
 
 def supervised_step(model, batch):
@@ -232,9 +242,16 @@ def train_sp_step(losses, model, optimizer, batch, args):
     losses['tts_'].append(tts_loss.detach().cpu().item())
 
 def train_ae_step(losses, model, optimizer, batch, args):
+    model.text_m.train()
+    model.speech_m.train()
+    model.discriminator.eval()
 
-    t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
-    loss = t_ae_loss + s_ae_loss
+    if args.use_discriminator:
+        t_ae_loss, s_ae_loss, t_d_loss, s_d_loss = autoencoder_step(model, batch, args.use_discriminator)
+        loss = t_ae_loss + s_ae_loss + t_d_loss + s_d_loss
+    else:
+        t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
+        loss = t_ae_loss + s_ae_loss
 
     # Take a optimizer step!
     optimizer_step(loss, model, optimizer, args)
@@ -242,6 +259,9 @@ def train_ae_step(losses, model, optimizer, batch, args):
     # Log losses
     losses['t_ae'].append(t_ae_loss.detach().cpu().item())
     losses['s_ae'].append(s_ae_loss.detach().cpu().item())
+    if args.use_discriminator:
+        losses['t_ae_d'].append(t_d_loss.detach().cpu().item())
+        losses['s_ae_d'].append(s_d_loss.detach().cpu().item())
 
 def train_cm_step(losses, model, optimizer, batch, args):
     # NOTE: do not use cross_model here bc need to take optimizer step inbetween

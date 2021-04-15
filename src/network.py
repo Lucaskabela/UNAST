@@ -93,11 +93,11 @@ class UNAST(nn.Module):
         self.speech_m = speech_m
         self.discriminator = discriminator
 
-    def text_ae(self, character_input):
-        return self.text_m.forward(character_input, noise_in=True)
+    def text_ae(self, character_input, ret_enc_hid=False):
+        return self.text_m.forward(character_input, noise_in=True, ret_enc_hid=ret_enc_hid)
 
-    def speech_ae(self, mel, mel_input):
-        return self.speech_m.forward(mel, mel_input, noise_in=True)
+    def speech_ae(self, mel, mel_input, ret_enc_hid=False):
+        return self.speech_m.forward(mel, mel_input, noise_in=True, ret_enc_hid=ret_enc_hid)
 
     def cm_text_in(self, character_input):
         t_e_o, t_hid, t_pad_mask = self.text_m.encode(character_input)
@@ -262,9 +262,11 @@ class SpeechRNN(AutoEncoderNet):
     def postprocess(self, dec_output, distrib=False):
         return self.postnet(dec_output)
 
-    def forward(self, input_, mel_input, noise_in=False):
+    def forward(self, input_, mel_input, noise_in=False, ret_enc_hid=False):
         encoder_outputs, latent_hidden, pad_mask = self.encode(input_, noise_in=noise_in)
         pred, stop_pred = self.decode_sequence(mel_input, latent_hidden, encoder_outputs, pad_mask)
+        if ret_enc_hid:
+            return pred, stop_pred, latent_hidden
         return pred, stop_pred
 
 class TextTransformer(AutoEncoderNet):
@@ -381,7 +383,9 @@ class TextRNN(AutoEncoderNet):
         res = res.masked_fill(pad_mask, PAD_IDX)
         return res
 
-    def forward(self, input_, noise_in=False):
+    def forward(self, input_, noise_in=False, ret_enc_hid = False):
         encoder_outputs, latent_hidden, pad_mask = self.encode(input_, noise_in=noise_in)
         pred = self.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask)
+        if ret_enc_hid:
+            return pred, latent_hidden
         return pred
