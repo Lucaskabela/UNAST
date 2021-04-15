@@ -361,7 +361,7 @@ def train(args):
             if args.use_discriminator:
                 for _ in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
-                    # TODO: Train discriminator
+                    train_discriminator_step(losses, model, optimizer, batch, args)
 
         # Eval and save
         log_loss_metrics(losses, epoch)
