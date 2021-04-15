@@ -198,8 +198,8 @@ def crossmodel_step(model, batch):
     return t_cm_loss, s_cm_loss
 
 def discriminator_hidden_to_loss(model, hid, target_type):
-    d_in = hid.permute(1,0,2)
-    d_out = model.discriminator(d_in[:, -1:, :]).permute(1,0,2)[0]
+    d_in = hid[-1]
+    d_out = model.discriminator(d_in)
     target = discriminator_target(d_out, target_type)
     d_loss = discriminator_loss(d_out, target)
     return d_loss
