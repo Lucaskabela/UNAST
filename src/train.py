@@ -269,19 +269,41 @@ def train_cm_step(losses, model, optimizer, batch, args):
     character, mel, mel_input, _  = x
     gold_char, gold_mel, gold_stop = y
 
+    loss = 0
     # Do speech!
-    pred, stop_pred = model.cm_speech_in(mel, mel_input)
+    if args.use_discriminator:
+        pred, stop_pred, s_hid, cm_t_hid = model.cm_speech_in(mel, mel_input, ret_enc_hid=args.use_discriminator)
+        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text')
+        cm_t_d_loss = discriminator_hidden_to_loss(model, cm_t_hid, 'speech')
+        loss = loss + s_d_loss + cm_t_d_loss
+    else:
+        pred, stop_pred = model.cm_speech_in(mel, mel_input, ret_enc_hid=args.use_discriminator)
     s_cm_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
-    optimizer_step(s_cm_loss, model, optimizer, args)
+    loss = loss + s_cm_loss
+    optimizer_step(loss, model, optimizer, args)
 
+    loss = 0
     # Now do text!
-    text_pred = model.cm_text_in(character).permute(1, 2, 0)
+    if args.use_discriminator:
+        text_pred, t_hid, cm_s_hid = model.cm_text_in(character, ret_enc_hid=args.use_discriminator)
+        text_pred = text_pred.permute(1, 2, 0)
+        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech')
+        cm_s_d_loss = discriminator_hidden_to_loss(model, cm_s_hid, 'text')
+        loss = loss + t_d_loss + cm_s_d_loss
+    else:
+        text_pred = model.cm_text_in(character).permute(1, 2, 0)
     t_cm_loss = text_loss(gold_char, text_pred)
-    optimizer_step(t_cm_loss, model, optimizer, args)
+    loss = loss + t_cm_loss
+    optimizer_step(loss, model, optimizer, args)
 
     # Log losses
     losses['s_cm'].append(s_cm_loss.detach().cpu().item())
     losses['t_cm'].append(t_cm_loss.detach().cpu().item())
+    if args.use_discriminator:
+        losses['s_cm_d'].append(s_d_loss.detach().cpu().item())
+        losses['t_cm_d'].append(t_d_loss.detach().cpu().item())
+        losses['cm_s_cm_d'].append(cm_s_d_loss.detach().cpu().item())
+        losses['cm_t_cm_d'].append(cm_t_d_loss.detach().cpu().item())
 
 def train_discriminator_step(losses, model, optimizer, batch, args):
     model.text_m.eval()

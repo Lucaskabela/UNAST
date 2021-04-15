@@ -99,18 +99,22 @@ class UNAST(nn.Module):
     def speech_ae(self, mel, mel_input, ret_enc_hid=False):
         return self.speech_m.forward(mel, mel_input, noise_in=True, ret_enc_hid=ret_enc_hid)
 
-    def cm_text_in(self, character_input):
+    def cm_text_in(self, character_input, ret_enc_hid=False):
         t_e_o, t_hid, t_pad_mask = self.text_m.encode(character_input)
         pred, stop_pred = self.speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
         cm_s_e_o, cm_s_hid, cm_s_pad_mask = self.speech_m.encode(pred)
         text_pred = self.text_m.decode_sequence(character_input, cm_s_hid, cm_s_e_o, cm_s_pad_mask)
+        if ret_enc_hid:
+            return text_pred, t_hid, cm_s_hid
         return text_pred
 
-    def cm_speech_in(self, mel, mel_input):
+    def cm_speech_in(self, mel, mel_input, ret_enc_hid=False):
         s_e_o, s_hid, s_pad_mask = self.speech_m.encode(mel)
         text_pred = self.text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
         cm_t_e_o, cm_t_hid, cm_t_pad_mask = self.text_m.encode(text_pred)
         pred, stop_pred = self.speech_m.decode_sequence(mel_input, cm_t_hid, cm_t_e_o, cm_t_pad_mask)
+        if ret_enc_hid:
+            return pred, stop_pred, s_hid, cm_t_hid
         return pred, stop_pred
 
     def tts(self, character, mel_input, infer=False):
