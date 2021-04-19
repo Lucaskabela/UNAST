@@ -26,8 +26,8 @@ def compute_per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengt
     gt_sents = []
     hyp_sents = []
     for b in range(ground_truth.shape[0]):
-        gt_sents.append(sequence_to_text(ground_truth[b][:].tolist()[:ground_truth_lengths[b]]))
-        hyp_sents.append(sequence_to_text(hypothesis[b][:].tolist()[:hypothesis_lengths[b]]))
+        gt_sents.append(' '.join(map(str, ground_truth[b][:].tolist()[:ground_truth_lengths[b]])))
+        hyp_sents.append(' '.join(map(str, hypothesis[b][:].tolist()[:hypothesis_lengths[b]])))
         
     return wer(gt_sents, hyp_sents)
 
@@ -50,7 +50,7 @@ def sent_lens_to_mask(lens, max_length):
     """
     m = [[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] 
         for i in range(0, lens.shape[0])]
-    return torch.FloatTensor(m, device=lens.device)
+    return torch.tensor(m, device=lens.device, dtype=torch.bool)
 
 def set_seed(seed):
     '''
@@ -93,9 +93,8 @@ def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):
     checkpoint_path: path to save checkpoint
     best_model_path: path to save best model
     """
-    ckpt_directory = os.path.dirname(checkpoint_path)
-    if not os.path.exists(ckpt_directory):
-        os.makedirs(ckpt_directory)
+    if not os.path.exists(checkpoint_path):
+        os.makedirs(checkpoint_path)
 
     state = {
         'epoch': epoch + 1,
