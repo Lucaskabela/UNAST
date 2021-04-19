@@ -264,6 +264,9 @@ def train_ae_step(losses, model, optimizer, batch, args):
         losses['s_ae_d'].append(s_d_loss.detach().cpu().item())
 
 def train_cm_step(losses, model, optimizer, batch, args):
+    model.text_m.train()
+    model.speech_m.train()
+    model.discriminator.eval()
     # NOTE: do not use cross_model here bc need to take optimizer step inbetween
     x, y = process_batch(batch)
     character, mel, mel_input, _  = x
