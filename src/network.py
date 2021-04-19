@@ -117,20 +117,24 @@ class UNAST(nn.Module):
             return pred, stop_pred, s_hid, cm_t_hid
         return pred, stop_pred
 
-    def tts(self, character, mel_input, infer=False):
+    def tts(self, character, mel_input, infer=False, ret_enc_hid=False):
         t_e_o, t_hid, t_pad_mask = self.text_m.encode(character)
         if not infer:
             pred, stop_pred = self.speech_m.decode_sequence(mel_input, t_hid, t_e_o, t_pad_mask)
         else:
             pred, stop_pred = self.speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
+        if ret_enc_hid:
+            return pred, stop_pred, t_hid
         return pred, stop_pred
 
-    def asr(self, character, mel, infer=False):
+    def asr(self, character, mel, infer=False, ret_enc_hid=False):
         s_e_o, s_hid, s_pad_mask = self.speech_m.encode(mel)
         if not infer:
             text_pred = self.text_m.decode_sequence(character, s_hid, s_e_o, s_pad_mask)
         else:
             text_pred = self.text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
+        if ret_enc_hid:
+            return text_pred, s_hid
         return text_pred
 
 class Discriminator(nn.Module):
