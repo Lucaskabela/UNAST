@@ -311,7 +311,7 @@ class TextRNN(AutoEncoderNet):
         """
         batch_size, max_out_len = target.shape[0], target.shape[1]
         outputs = []
-        input_ = torch.LongTensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device)
+        input_ = torch.tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long)
         for i in range(max_out_len):
             input_embed = self.prenet.embed(input_).unsqueeze(1)
             dec_out, hidden_state = self.decode(input_embed, hidden_state, enc_output, enc_ctxt_mask)
@@ -352,7 +352,7 @@ class TextRNN(AutoEncoderNet):
         seq_lens = torch.zeros(batch_size, device=enc_output.device)
         
         # get a all 0 frame for first timestep
-        input_ = torch.LongTensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device)
+        input_ = torch.tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long)
         i = 0
         keep_gen = torch.any(seq_lens.eq(0)) and i < max_len
 
