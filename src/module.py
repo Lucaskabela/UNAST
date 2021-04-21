@@ -301,7 +301,7 @@ class RNNDecoder(nn.Module):
         if self.attention:
             self.attention_layer = LuongGeneralAttention(hidden, enc_out_size, attn_dim)
             # self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
-            self.linear_projection(self.input_size, hidden)
+            self.linear_projection = nn.Linear(self.input_size, hidden)
             self.dropout1 = nn.Dropout(p=dropout)
 
 

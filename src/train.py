@@ -247,6 +247,7 @@ def train(args):
             collate_fn=collate_fn_transformer, drop_last=True,
             num_workers=args.num_workers)
     s_epoch, best, model, optimizer = initialize_model(args)
+    print("Training model with {} parameters".format(model.num_params()))
     milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
     sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
     for epoch in range(s_epoch, args.epochs):
