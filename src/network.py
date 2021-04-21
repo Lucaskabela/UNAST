@@ -187,7 +187,7 @@ class SpeechRNN(AutoEncoderNet):
         enc_output, hidden_state = self.encoder(mel_features)
         return enc_output, hidden_state, pad_mask
 
-    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=800):
+    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=815):
 
         batch_size = enc_output.shape[0]
         outputs = []
@@ -209,12 +209,12 @@ class SpeechRNN(AutoEncoderNet):
             i += 1
 
             # double check this!
-            stop_mask = (F.sigmoid(stop_pred) >= .5).logical_and(stop_lens == 0)
+            stop_mask = (torch.sigmoid(stop_pred) >= .5).logical_and(stop_lens == 0)
             stop_lens[stop_mask] = i
             keep_gen = torch.any(stop_lens.eq(0)) and i < max_len
 
         # Maybe this is a bit overkil...
-        stop_lens = stop_lens[stop_lens == 0] = len(outputs)
+        stop_lens[stop_lens == 0] = len(outputs)
         pad_mask = sent_lens_to_mask(stop_lens, len(outputs))
 
         res, res_stop = torch.stack(outputs, dim=1).squeeze(), torch.stack(stops, dim=1).squeeze()
@@ -231,13 +231,13 @@ class SpeechRNN(AutoEncoderNet):
         stops = []
         # get a all 0 frame for first timestep
         input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
-        for i in range(max_out_len - 1):
+        for i in range(max_out_len):
             (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             outputs.append(dec_out)
             stops.append(stop_pred)
 
-            if random.random() < teacher_ratio and i + 1 < max_out_len:
-                input_ = target[:, i+1, :].unsqueeze(1)
+            if random.random() < teacher_ratio:
+                input_ = target[:, i, :].unsqueeze(1)
             else:
                 input_ = outputs[-1]
 
@@ -258,13 +258,13 @@ class SpeechRNN(AutoEncoderNet):
         """
         input_ = self.prenet(input_)
         dec_output, dec_hidden = self.decoder(input_, hidden_state, enc_output, enc_ctxt_mask)
-        return self.mel_and_stop(dec_output), dec_hidden
+        return self.postnet.mel_and_stop(dec_output), dec_hidden
 
     def postprocess(self, dec_output, distrib=False):
         return self.postnet(dec_output)
 
-    def forward(self, input_, mel, noise_in=False):
-        encoder_outputs, latent_hidden, pad_mask = self.encode(input_, noise_in=noise_in)
+    def forward(self, mel, noise_in=False):
+        encoder_outputs, latent_hidden, pad_mask = self.encode(mel, noise_in=noise_in)
         pred, stop_pred = self.decode_sequence(mel, latent_hidden, encoder_outputs, pad_mask)
         return pred, stop_pred
         
@@ -349,7 +349,7 @@ class TextRNN(AutoEncoderNet):
         else:
             return final_out
 
-    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=200):
+    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=300):
 
         batch_size = enc_output.shape[0]
         outputs = []

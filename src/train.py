@@ -79,9 +79,8 @@ def process_batch(batch):
     # stop label should be 1 for length
     # currently, find first nonzero (so pad_idx) in pos_mel, or set to length
     with torch.no_grad():
-        gold_stop = F.one_hot(mel_len, mel.shape[1]).float().detach()
-        print(mel_len)
-        print(gold_stop)
+        # Subtract 1 from mel_lengths to get 0 based indexing!
+        gold_stop = F.one_hot(mel_len - 1, mel.shape[1]).float().detach()
     return (character, mel, text_len, mel_len), (gold_char, gold_mel, gold_stop)
 
 
@@ -92,7 +91,7 @@ def text_loss(gold_char, text_pred):
 
 def speech_loss(gold_mel, stop_label, pred_mel, mel_len, stop_pred):
     # Apply length mask to pred_mel!
-    pred_mel = pred_mel * sent_lens_to_mask(mel_len, pred_mel.shape[1]).detach()
+    pred_mel = pred_mel * sent_lens_to_mask(mel_len, pred_mel.shape[1]).detach().unsqueeze(-1)
     pred_loss = F.mse_loss(pred_mel, gold_mel)
     stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
     return pred_loss + stop_loss

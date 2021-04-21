@@ -85,7 +85,7 @@ def collate_fn_transformer(batch):
 
         text = [i for i,_ in sorted(zip(text, text_length), key=lambda x: x[1], reverse=True)]
         mel = [i for i, _ in sorted(zip(mel, text_length), key=lambda x: x[1], reverse=True)]
-        mel_length = [i for i, _ in sorted(zip(mel, text_length), key=lambda x: x[1], reverse=True)]
+        mel_length = [i for i, _ in sorted(zip(mel_length, text_length), key=lambda x: x[1], reverse=True)]
         # mel_input = [i for i, _ in sorted(zip(mel_input, text_length), key=lambda x: x[1], reverse=True)]
         # pos_text = [i for i, _ in sorted(zip(pos_text, text_length), key=lambda x: x[1], reverse=True)]
         # pos_mel = [i for i, _ in sorted(zip(pos_mel, text_length), key=lambda x: x[1], reverse=True)]
