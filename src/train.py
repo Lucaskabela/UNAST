@@ -252,11 +252,10 @@ def train(args):
     log_loss_metrics(eval_losses, -1, eval=True)
     milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
     sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
+    batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
     for epoch in range(s_epoch, args.epochs):
         model.train()
         losses = defaultdict(list)
-
-        batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
 
         # one step is doing all 4 training tasks
         if args.epoch_steps >= 0:

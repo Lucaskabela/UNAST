@@ -174,7 +174,7 @@ class SpeechRNN(AutoEncoderNet):
         # should already be padded as well
         # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
         # NOTE: I do not think this is correct for mel... but check if all are padding in num_mels
-        pad_mask = torch.all(raw_input_tensor.eq(PAD_IDX), dim=-1).squeeze() 
+        pad_mask = torch.all(raw_input_tensor.eq(PAD_IDX), dim=-1)
         return self.prenet(raw_input_tensor), pad_mask
 
     def encode(self, raw_input_tensor, noise_in=False):
@@ -300,7 +300,7 @@ class TextRNN(AutoEncoderNet):
         # raw_input_tensor should be a LongTensor of size [batch_size x seq_len x 1]
         # should already be padded as well
         # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
-        pad_mask = raw_input_tensor.eq(PAD_IDX).squeeze() 
+        pad_mask = raw_input_tensor.eq(PAD_IDX) 
         return self.prenet(raw_input_tensor), pad_mask
 
     def encode(self, raw_input_tensor, noise_in=False):
