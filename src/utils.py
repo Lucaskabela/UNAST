@@ -106,14 +106,14 @@ def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):
         'optimizer': optimizer.state_dict(),
     }
 
-    f_path = checkpoint_path + '/model_{}.ckpt'.format(state['epoch'])
     # save checkpoint data to the path given, checkpoint_path
+    f_path = checkpoint_path + '/model_most_recent.ckpt'
     torch.save(state, f_path)
     # if it is a best model, min validation loss
     if is_best:
         best_fpath = checkpoint_path + '/model_best.ckpt'
         # copy that checkpoint file to best path given, best_model_path
-        shutil.copyfile(f_path, best_fpath)
+        torch.save(state, best_fpath)
 
 
 def load_ckp(checkpoint_fpath, model, optimizer):

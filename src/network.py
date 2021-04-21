@@ -205,6 +205,8 @@ class SpeechRNN(AutoEncoderNet):
         input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
         i = 0
         keep_gen = torch.any(stop_lens.eq(0)) and i < max_len
+        if self.decoder.las:
+            self.decoder.attention_layer.init_memory(enc_output)
 
         while keep_gen:
             (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
@@ -238,6 +240,8 @@ class SpeechRNN(AutoEncoderNet):
         stops = []
         # get a all 0 frame for first timestep
         input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
+        if self.decoder.las:
+            self.decoder.attention_layer.init_memory(enc_output)
         for i in range(max_out_len):
             (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             outputs.append(dec_out)
@@ -323,6 +327,8 @@ class TextRNN(AutoEncoderNet):
         batch_size, max_out_len = target.shape[0], target.shape[1]
         outputs = []
         input_ = torch.tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long)
+        if self.decoder.las:
+            self.decoder.attention_layer.init_memory(enc_output)
         for i in range(max_out_len):
             dec_out, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             outputs.append(dec_out)
@@ -366,7 +372,8 @@ class TextRNN(AutoEncoderNet):
         input_ = torch.tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long)
         i = 0
         keep_gen = torch.any(seq_lens.eq(0)) and i < max_len
-
+        if self.decoder.las:
+            self.decoder.attention_layer.init_memory(enc_output)
         while keep_gen:
             dec_out, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             input_ = torch.argmax(dec_out, dim=-1)

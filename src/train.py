@@ -298,11 +298,10 @@ def train(args):
         log_loss_metrics(eval_losses, epoch, eval=True)
         sched.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
-        save_ckp(-1, per, model, optimizer, False, args.checkpoint_path)
+        save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
         if per < best:
             print("\t Best score - saving model!")
             best = per
-            save_ckp(epoch, per, model, optimizer, True, args.checkpoint_path)
     model.eval()
     return model
 

@@ -286,10 +286,11 @@ class RNNEncoder(nn.Module):
         return output, h_t
 
 class RNNDecoder(nn.Module):
-    def __init__(self, enc_out_size, hidden, dropout=.2, num_layers=1, attention=False, attn_dim=0):
+    def __init__(self, enc_out_size, hidden, dropout=.2, num_layers=1, attention=False, attn_dim=0, las=False):
         super(RNNDecoder, self).__init__()
 
         self.attention = attention
+        self.las = las
         if self.attention:
             self.input_size = enc_out_size + hidden
         else:
@@ -299,9 +300,12 @@ class RNNDecoder(nn.Module):
             batch_first=True, dropout=dropout)
 
         if self.attention:
-            self.attention_layer = LuongGeneralAttention(hidden, enc_out_size, attn_dim)
+            if las:
+                self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
+            else:
+                self.attention_layer = LuongGeneralAttention(hidden, enc_out_size, attn_dim)
             # self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
-            self.linear_projection = nn.Linear(self.input_size, hidden)
+            self.linear_projection = Linear(self.input_size, hidden, w_init='tanh')
             self.dropout1 = nn.Dropout(p=dropout)
 
 
@@ -316,9 +320,8 @@ class RNNDecoder(nn.Module):
             decode_input = embed_decode
 
         output, hidden = self.rnn(decode_input, hidden_state)
-        # TODO: Use attention term here - requires changing linears 2x larger...
         if self.attention:
-            output = self.dropout1(self.linear_projection(torch.cat((output, attn_W), dim=-1)))
+            output = self.dropout1(torch.tanh(self.linear_projection(torch.cat((output, attn_W), dim=-1))))
         return output, hidden
 
 
@@ -332,7 +335,7 @@ class LocationLayer(nn.Module):
                                       padding=padding, bias=False, stride=1,
                                       dilation=1)
         self.location_dense = Linear(attention_n_filters, attention_dim,
-                                         bias=False, w_init_gain='tanh')
+                                         bias=False, w_init='tanh')
 
     def forward(self, attention_weights_cat):
         processed_attention = self.location_conv(attention_weights_cat)
@@ -345,9 +348,9 @@ class LocationSensitiveAttention(nn.Module):
                  attention_location_n_filters=32, attention_location_kernel_size=31):
         super(Attention, self).__init__()
         self.query_layer = Linear(hidden_dim, attention_dim,
-                                      bias=False, w_init_gain='tanh')
+                                      bias=False, w_init='tanh')
         self.memory_layer = Linear(encoder_dim, attention_dim, bias=False,
-                                       w_init_gain='tanh')
+                                       w_init='tanh')
         self.v = Linear(attention_dim, 1, bias=False)
         self.location_layer = LocationLayer(attention_location_n_filters,
                                             attention_location_kernel_size,
@@ -356,7 +359,9 @@ class LocationSensitiveAttention(nn.Module):
 
     def init_memory(self, enc_output):
         self.processed_memory = self.memory_layer(enc_output)
-        self.attention_cat = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
+        self.attention_weights_cum = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
+            device=enc_ouptut.device)
+        self.attention_weights = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
             device=enc_ouptut.device)
 
     def get_alignment_energies(self, query, processed_memory,
@@ -390,18 +395,18 @@ class LocationSensitiveAttention(nn.Module):
         attention_weights_cat: previous and cummulative attention weights
         mask: binary mask for padded data - 1 for no padding, 0 for padding
         """
+        attention_cat = torch.cat((attention_weights.unsqueeze(1),
+             self.attention_weights_cum.unsqueeze(1)), dim=1)
+
         alignment = self.get_alignment_energies(
-            hidden_state, self.processed_memory, self.attention_cat)
+            hidden_state, self.processed_memory, attention_cat)
 
         if mask is not None:
             alignment.data.masked_fill_(mask, self.score_mask_value)
 
-        attention_weights = F.softmax(alignment, dim=1).unsqueeze(1)
-        self.attention_cat += attention_weights
-        self.attention_cat = torch.cat((attention_weights.unsqueeze(1),
-             self.attention_weights_cum.unsqueeze(1)), dim=1)
-
-        ctxt = torch.bmm(attention_weights, memory)
+        self.attention_weights = F.softmax(alignment, dim=1)
+        self.attention_weights_cum += attention_weights
+        ctxt = torch.bmm(attention_weights.unsqueeze(1), memory)
         return ctxt
 
 class LuongGeneralAttention(nn.Module):
