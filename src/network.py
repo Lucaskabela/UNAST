@@ -222,6 +222,9 @@ class SpeechRNN(AutoEncoderNet):
             stop_lens[stop_mask] = i
             keep_gen = torch.any(stop_lens.eq(0)) and i < max_len
 
+        if self.decoder.las:
+            self.decoder.attention_layer.clear_memory()
+
         # Maybe this is a bit overkil...
         stop_lens[stop_lens == 0] = len(outputs)
         pad_mask = sent_lens_to_mask(stop_lens, len(outputs))
@@ -251,6 +254,9 @@ class SpeechRNN(AutoEncoderNet):
                 input_ = target[:, i, :].unsqueeze(1)
             else:
                 input_ = outputs[-1]
+
+        if self.decoder.las:
+            self.decoder.attention_layer.clear_memory()
 
         decoder_outputs = torch.stack(outputs, dim=1).squeeze()
         res = decoder_outputs + self.postprocess(decoder_outputs)
@@ -336,6 +342,8 @@ class TextRNN(AutoEncoderNet):
                 input_ = target[:, i]
             else:
                 input_ = torch.argmax(dec_out, dim=-1).squeeze()
+        if self.decoder.las:
+            self.decoder.attention_layer.clear_memory()
         return torch.stack(outputs, dim=1).squeeze(2)
 
     def decode(self, input_, hidden_state, enc_output, enc_ctxt_mask):
@@ -388,6 +396,8 @@ class TextRNN(AutoEncoderNet):
             keep_gen = torch.any(seq_lens.eq(0)) and i < max_len
 
         # Maybe this is a bit overkil...
+        if self.decoder.las:
+            self.decoder.attention_layer.clear_memory()
         seq_lens[seq_lens == 0] = len(outputs)
         pad_mask = sent_lens_to_mask(seq_lens, len(outputs)).detach()
 

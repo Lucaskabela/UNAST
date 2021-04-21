@@ -363,7 +363,12 @@ class LocationSensitiveAttention(nn.Module):
             device=enc_ouptut.device)
         self.attention_weights = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
             device=enc_ouptut.device)
-
+    
+    def clear_memory(self):
+        self.processed_memory = None
+        self.attention_weights_cum = None
+        self.attention_weight = None
+    
     def get_alignment_energies(self, query, processed_memory,
                                attention_weights_cat):
         """
