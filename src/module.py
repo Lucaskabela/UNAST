@@ -327,11 +327,11 @@ class LocationLayer(nn.Module):
                  attention_dim):
         super(LocationLayer, self).__init__()
         padding = int((attention_kernel_size - 1) / 2)
-        self.location_conv = ConvNorm(2, attention_n_filters,
+        self.location_conv = Conv(2, attention_n_filters,
                                       kernel_size=attention_kernel_size,
                                       padding=padding, bias=False, stride=1,
                                       dilation=1)
-        self.location_dense = LinearNorm(attention_n_filters, attention_dim,
+        self.location_dense = Linear(attention_n_filters, attention_dim,
                                          bias=False, w_init_gain='tanh')
 
     def forward(self, attention_weights_cat):
@@ -344,11 +344,11 @@ class LocationSensitiveAttention(nn.Module):
     def __init__(self, hidden_dim, encoder_dim, attention_dim,
                  attention_location_n_filters=32, attention_location_kernel_size=31):
         super(Attention, self).__init__()
-        self.query_layer = LinearNorm(hidden_dim, attention_dim,
+        self.query_layer = Linear(hidden_dim, attention_dim,
                                       bias=False, w_init_gain='tanh')
-        self.memory_layer = LinearNorm(encoder_dim, attention_dim, bias=False,
+        self.memory_layer = Linear(encoder_dim, attention_dim, bias=False,
                                        w_init_gain='tanh')
-        self.v = LinearNorm(attention_dim, 1, bias=False)
+        self.v = Linear(attention_dim, 1, bias=False)
         self.location_layer = LocationLayer(attention_location_n_filters,
                                             attention_location_kernel_size,
                                             attention_dim)
@@ -409,7 +409,8 @@ class LuongGeneralAttention(nn.Module):
         super(LuongGeneralAttention, self).__init__()
         self.hidden_size = hidden_size
         self.enc_out_size = enc_out_size
-        self.fc1 = nn.Linear(hidden_size + enc_out_size, attention_dim, bias=False)
+        self.project_hid = nn.Linear(hidden_size, attention_dim, bias=False)
+        self.project_eo = nn.Linear(enc_out_size, attention_dim, bias=False)
         self.fc2 = nn.Linear(attention_dim, 1, bias=False)
 
     def forward(self, hidden, enc_output, enc_ctxt_mask):
@@ -417,19 +418,17 @@ class LuongGeneralAttention(nn.Module):
         Returns the alignment weights
         '''
         src_len = enc_output.shape[1]
-        hidden = hidden.repeat(src_len, 1, 1)
         e_o = enc_output.permute(1, 0, 2)
-        combined = torch.cat((hidden, e_o), dim=-1)
+        combined = self.project_hid(hidden) + self.project_eo(e_o)
 
         # combined is [seq_len x batch_size x hidden + enc_out]
-        align_scores = self.fc2(torch.tanh(self.fc1(combined))).squeeze(-1)
+        align_scores = self.fc2(torch.tanh(combined)).squeeze(-1)
         # align_scores is [seq_len x batch_size], so flip and mask all padding
         align_scores = align_scores.permute(1, 0)
         align_scores.data.masked_fill_(enc_ctxt_mask, -np.inf)
 
         align_weights = F.softmax(align_scores, dim=-1).unsqueeze(1)
         # align_weights is [batch_size x seq_len x 1] where each entry is score over sequence
-
 
         # Note: If input is a (b×n×m) tensor, mat2 is a (b×m×p) tensor
         #  --- out will be a (b×n×p) tensor.

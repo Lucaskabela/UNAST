@@ -224,7 +224,7 @@ class SpeechRNN(AutoEncoderNet):
         stop_lens[stop_lens == 0] = len(outputs)
         pad_mask = sent_lens_to_mask(stop_lens, len(outputs))
 
-        res, res_stop = torch.stack(outputs, dim=1).squeeze(), torch.stack(stops, dim=1).squeeze()
+        res, res_stop = torch.stack(outputs, dim=1).squeeze(2), torch.stack(stops, dim=1).squeeze(1)
         res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1).detach()
         res_stop = res_stop * pad_mask.detach()
         return res, res_stop

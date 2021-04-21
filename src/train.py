@@ -235,7 +235,7 @@ def evaluate(model, valid_dataloader):
             n_iters += 1
 
     # TODO: evaluate speech inference somehow?
-    compare_outputs(character[-1][:], hypothesis[-1][:], text_len[-1], len_mask_idx[-1])
+    compare_outputs(character[-1][:], text_pred[-1][:], text_len[-1], len_mask_idx[-1])
     return per/n_iters, losses
 
 def train(args):
@@ -248,6 +248,8 @@ def train(args):
             num_workers=args.num_workers)
     s_epoch, best, model, optimizer = initialize_model(args)
     print("Training model with {} parameters".format(model.num_params()))
+    per, eval_losses = evaluate(model, valid_dataloader)
+    log_loss_metrics(eval_losses, -1, eval=True)
     milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
     sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
     for epoch in range(s_epoch, args.epochs):
