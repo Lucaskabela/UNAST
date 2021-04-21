@@ -31,6 +31,9 @@ def compute_per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengt
         
     return wer(gt_sents, hyp_sents)
 
+def compare_outputs(ground_truth, hypothesis, gt_len, hyp_len):
+    print("Model prediction of length {hyp_len} ", sequence_to_text(hypothesis.tolist()[:hyp_len]))
+    print("Ground Truth of length {gt_len} ", sequence_to_text(ground_truth.tolist()[:gt_len]))
 
 def noise_fn(to_noise, mask_p=.3, swap_p=0):
     """

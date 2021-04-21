@@ -17,6 +17,7 @@ import torch.nn as nn
 import torch
 import numpy as np
 from collections import defaultdict
+from data import sequence_to_text
 import math
 
 # DEVICE is only global variable
@@ -234,6 +235,7 @@ def evaluate(model, valid_dataloader):
             n_iters += 1
 
     # TODO: evaluate speech inference somehow?
+    compare_outputs(character[-1][:], hypothesis[-1][:], text_len[-1], len_mask_idx[-1])
     return per/n_iters, losses
 
 def train(args):
@@ -245,7 +247,8 @@ def train(args):
             collate_fn=collate_fn_transformer, drop_last=True,
             num_workers=args.num_workers)
     s_epoch, best, model, optimizer = initialize_model(args)
-
+    milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
+    sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
     for epoch in range(s_epoch, args.epochs):
         model.train()
         losses = defaultdict(list)
@@ -290,7 +293,9 @@ def train(args):
         log_loss_metrics(losses, epoch)
         per, eval_losses = evaluate(model, valid_dataloader)
         log_loss_metrics(eval_losses, epoch, eval=True)
+        sched.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
+        save_ckp(-1, per, model, optimizer, False, args.checkpoint_path)
         if per < best:
             print("\t Best score - saving model!")
             best = per
@@ -404,30 +409,29 @@ def initialize_model(args):
     """
         Using args, initialize starting epoch, best per, model, optimizer
     """
+    text_m, speech_m, discriminator = None, None, None
+    if args.model_type == 'rnn':
+        text_m = TextRNN(args).to(DEVICE)
+        speech_m = SpeechRNN(args).to(DEVICE)
+    elif args.model_type == 'transformer':
+        # TODO: Fill it in
+        pass
+
+    if args.use_discriminator:
+        # TODO: Fill it in
+        pass
+    model = UNAST(text_m, speech_m, discriminator)
+
+    # initialize optimizer
+    optimizer = None
+    if args.optim_type == 'adam':
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    s_epoch, best = 0, 100
+
     if args.load_path is not None:
-        model = UNAST(None, None, None)
-        optimizer = toch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
         s_epoch = s_epoch + 1
-    else:
-        text_m, speech_m, discriminator = None, None, None
-        if args.model_type == 'rnn':
-            text_m = TextRNN(args).to(DEVICE)
-            speech_m = SpeechRNN(args).to(DEVICE)
-        elif args.model_type == 'transformer':
-            # TODO: Fill it in
-            pass
-
-        if args.use_discriminator:
-            # TODO: Fill it in
-            pass
-        model = UNAST(text_m, speech_m, discriminator)
-
-        # initialize optimizer
-        optimizer = None
-        if args.optim_type == 'adam':
-            optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
-            s_epoch, best = 0, 100
 
     return s_epoch, best, model, optimizer
 
