@@ -142,7 +142,9 @@ class SpeechPostnet(nn.Module):
 
         self.dropout1 = nn.Dropout(p=p)
         self.dropout_list = nn.ModuleList([nn.Dropout(p=p) for _ in range(3)])
-        self.stop_linear = nn.Linear(num_mels, 1)
+
+        self.stop_linear = nn.Linear(num_hidden, 1)
+        self.linear_project = nn.Linear(num_hidden, num_mels)
 
     def forward(self, input_):
         """
@@ -151,13 +153,17 @@ class SpeechPostnet(nn.Module):
                        as we change the shape ourselves
         """
         # Causal Convolution (for auto-regressive)
-        stop_pred = self.stop_linear(input_)
         input_ = input_.permute(0, 2, 1)
         input_ = self.dropout1(torch.tanh(self.pre_batchnorm(self.conv1(input_)[:, :, :-4])))
         for batch_norm, conv, dropout in zip(self.batch_norm_list, self.conv_list, self.dropout_list):
             input_ = dropout(torch.tanh(batch_norm(conv(input_)[:, :, :-4])))
         input_ = self.conv2(input_)[:, :, :-4]
-        return input_, stop_pred
+        input_ = input_.permute(0, 2, 1)
+        return input_
+
+    def mel_and_stop(self, decoder_out):
+            return self.linear_project(decoder_out), self.stop_linear(decoder_out)
+
 
 
 class TextPrenet(nn.Module):
@@ -168,7 +174,7 @@ class TextPrenet(nn.Module):
     convolutional networks. Should be the same as Ren's paper
     since it outputs an embedding of size 256 for each phoneme.
     """
-    def __init__(self, embedding_size, num_hidden):
+    def __init__(self, embedding_size, num_hidden, p=0.5):
         """
         :param embedding_size: phoneme embedding size
         :param num_hidden: output embedding size
@@ -198,39 +204,37 @@ class TextPrenet(nn.Module):
         self.batch_norm2 = nn.BatchNorm1d(num_hidden)
         self.batch_norm3 = nn.BatchNorm1d(num_hidden)
 
-        self.dropout1 = nn.Dropout(p=0.2)
-        self.dropout2 = nn.Dropout(p=0.2)
-        self.dropout3 = nn.Dropout(p=0.2)
-        self.projection = Linear(num_hidden, num_hidden)
+        self.emb_dropout = nn.Dropout(p=p)
+        self.dropout1 = nn.Dropout(p=p)
+        self.dropout2 = nn.Dropout(p=p)
+        self.dropout3 = nn.Dropout(p=p)
 
     def forward(self, input_):
         """
         :param input_: Tensor of Phoneme IDs (text)
         """
-        input_ = self.embed(input_)
+        input_ = self.emb_dropout(self.embed(input_))
         input_ = input_.transpose(1, 2)
         input_ = self.dropout1(torch.relu(self.batch_norm1(self.conv1(input_))))
         input_ = self.dropout2(torch.relu(self.batch_norm2(self.conv2(input_))))
         input_ = self.dropout3(torch.relu(self.batch_norm3(self.conv3(input_))))
         input_ = input_.transpose(1, 2)
-        input_ = self.projection(input_)
         return input_
 
 class TextPostnet(nn.Module):
     """
 
     """
-    def __init__(self, d_out, hidden):
+    def __init__(self, hidden, p=.2):
         super(TextPostnet, self).__init__()
-        self.fc1 = nn.Linear(d_out, hidden)
-        self.dropout1 = nn.Dropout(p=0.2)
-        self.fc2 = nn.Linear(hidden, len(symbols))
+        self.fc1 = nn.Linear(hidden, len(symbols))
+        self.dropout1 = nn.Dropout(p=p)
 
     def forward(self, decode_out):
         """
         Need to do log softmax if you want probabilities
         """
-        return self.fc2(self.dropout1(torch.relu(self.fc1(decode_out))))
+        return self.fc1(self.dropout1(decode_out))
 
 class TransformerEncoder(nn.Module):
     # TODO: Fill in from TTS repo :)
@@ -244,7 +248,7 @@ class TransformerDecoder(nn.Module):
 
 class RNNEncoder(nn.Module):
     # TODO: Write this
-    def __init__(self, d_in, hidden, d_out, dropout=.2, num_layers=1, bidirectional=False):
+    def __init__(self, d_in, hidden, dropout=.2, num_layers=1, bidirectional=False):
         super(RNNEncoder, self).__init__()
         self.hidden = hidden
         self.num_layers = num_layers
@@ -253,9 +257,6 @@ class RNNEncoder(nn.Module):
         # TODO: expirement with something else than LSTM
         self.rnn = nn.LSTM(d_in, hidden, num_layers=num_layers,
             bidirectional=bidirectional, batch_first=True, dropout=dropout)
-
-        # Consider using this?
-        self.hid2out = nn.Linear(self.num_dir * hidden, d_out)
 
         if self.num_dir == 2:
             self.reduce_h_W = nn.Linear(hidden * 2, hidden, bias=True)
@@ -282,26 +283,31 @@ class RNNEncoder(nn.Module):
             h, c = hn[0][:], hn[1][:]
             h_t = (h, c)
 
-        return self.hid2out(output), h_t
+        return output, h_t
 
 class RNNDecoder(nn.Module):
-    def __init__(self, enc_out_size, d_in, hidden, d_out, dropout=.2, num_layers=1, attention=False):
+    def __init__(self, enc_out_size, hidden, dropout=.2, num_layers=1, attention=False, attn_dim=0, las=False):
         super(RNNDecoder, self).__init__()
 
         self.attention = attention
+        self.las = las
         if self.attention:
-            self.input_size = enc_out_size + d_in
+            self.input_size = enc_out_size + hidden
         else:
-            self.input_size = d_in
+            self.input_size = hidden
 
         self.rnn = nn.LSTM(self.input_size, hidden, num_layers=num_layers,
             batch_first=True, dropout=dropout)
 
-        # Luong attention TODO: ADD DROPOUT!?
         if self.attention:
-            self.attention_layer = LuongGeneralAttention(hidden, enc_out_size)
+            if las:
+                self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
+            else:
+                self.attention_layer = LuongGeneralAttention(hidden, enc_out_size, attn_dim)
+            # self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
+            self.linear_projection = Linear(self.input_size, hidden, w_init='tanh')
+            self.dropout1 = nn.Dropout(p=dropout)
 
-        self.out_layer = nn.Linear(hidden, d_out)
 
     def forward(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
         # TODO: Check shape here?
@@ -314,35 +320,120 @@ class RNNDecoder(nn.Module):
             decode_input = embed_decode
 
         output, hidden = self.rnn(decode_input, hidden_state)
+        if self.attention:
+            output = self.dropout1(torch.tanh(self.linear_projection(torch.cat((output, attn_W), dim=-1))))
+        return output, hidden
 
-        return self.out_layer(output), hidden
+
+class LocationLayer(nn.Module):
+    def __init__(self, attention_n_filters, attention_kernel_size,
+                 attention_dim):
+        super(LocationLayer, self).__init__()
+        padding = int((attention_kernel_size - 1) / 2)
+        self.location_conv = Conv(2, attention_n_filters,
+                                      kernel_size=attention_kernel_size,
+                                      padding=padding, bias=False, stride=1,
+                                      dilation=1)
+        self.location_dense = Linear(attention_n_filters, attention_dim,
+                                         bias=False, w_init='tanh')
+
+    def forward(self, attention_weights_cat):
+        processed_attention = self.location_conv(attention_weights_cat)
+        processed_attention = processed_attention.transpose(1, 2)
+        processed_attention = self.location_dense(processed_attention)
+        return processed_attention
+
+class LocationSensitiveAttention(nn.Module):
+    def __init__(self, hidden_dim, encoder_dim, attention_dim,
+                 attention_location_n_filters=32, attention_location_kernel_size=31):
+        super(Attention, self).__init__()
+        self.query_layer = Linear(hidden_dim, attention_dim,
+                                      bias=False, w_init='tanh')
+        self.memory_layer = Linear(encoder_dim, attention_dim, bias=False,
+                                       w_init='tanh')
+        self.v = Linear(attention_dim, 1, bias=False)
+        self.location_layer = LocationLayer(attention_location_n_filters,
+                                            attention_location_kernel_size,
+                                            attention_dim)
+        self.score_mask_value = -float("inf")
+
+    def init_memory(self, enc_output):
+        self.processed_memory = self.memory_layer(enc_output)
+        self.attention_weights_cum = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
+            device=enc_ouptut.device)
+        self.attention_weights = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
+            device=enc_ouptut.device)
+
+    def get_alignment_energies(self, query, processed_memory,
+                               attention_weights_cat):
+        """
+        PARAMS
+        ------
+        query: decoder output (batch x 1 x n_mel_channels)
+        processed_memory: processed encoder outputs (B, T_in, attention_dim)
+        attention_weights_cat: cumulative and prev. att weights (B, 2, max_time)
+        RETURNS
+        -------
+        alignment (batch, max_time)
+        """
+
+        processed_query = self.query_layer(query)
+        processed_attention_weights = self.location_layer(attention_weights_cat)
+        energies = self.v(torch.tanh(
+            processed_query + processed_attention_weights + processed_memory))
+
+        energies = energies.squeeze(-1)
+        return energies
+
+    def forward(self, hidden_state, memory, mask):
+        """
+        PARAMS
+        ------
+        attention_hidden_state: attention rnn last output
+        memory: encoder outputs
+        processed_memory: processed encoder outputs (done once for compute)
+        attention_weights_cat: previous and cummulative attention weights
+        mask: binary mask for padded data - 1 for no padding, 0 for padding
+        """
+        attention_cat = torch.cat((attention_weights.unsqueeze(1),
+             self.attention_weights_cum.unsqueeze(1)), dim=1)
+
+        alignment = self.get_alignment_energies(
+            hidden_state, self.processed_memory, attention_cat)
+
+        if mask is not None:
+            alignment.data.masked_fill_(mask, self.score_mask_value)
+
+        self.attention_weights = F.softmax(alignment, dim=1)
+        self.attention_weights_cum += attention_weights
+        ctxt = torch.bmm(attention_weights.unsqueeze(1), memory)
+        return ctxt
 
 class LuongGeneralAttention(nn.Module):
-    def __init__(self, hidden_size, enc_out_size):
+    def __init__(self, hidden_size, enc_out_size, attention_dim):
         super(LuongGeneralAttention, self).__init__()
         self.hidden_size = hidden_size
         self.enc_out_size = enc_out_size
-        self.fc1 = nn.Linear(hidden_size + enc_out_size, hidden_size, bias=False)
-        self.fc2 = nn.Linear(hidden_size, 1, bias=False)
+        self.project_hid = nn.Linear(hidden_size, attention_dim, bias=False)
+        self.project_eo = nn.Linear(enc_out_size, attention_dim, bias=False)
+        self.fc2 = nn.Linear(attention_dim, 1, bias=False)
 
     def forward(self, hidden, enc_output, enc_ctxt_mask):
         '''
         Returns the alignment weights
         '''
         src_len = enc_output.shape[1]
-        hidden = hidden.repeat(src_len, 1, 1)
         e_o = enc_output.permute(1, 0, 2)
-        combined = torch.cat((hidden, e_o), dim=-1)
+        combined = self.project_hid(hidden) + self.project_eo(e_o)
 
         # combined is [seq_len x batch_size x hidden + enc_out]
-        align_scores = self.fc2(torch.tanh(self.fc1(combined))).squeeze(-1)
+        align_scores = self.fc2(torch.tanh(combined)).squeeze(-1)
         # align_scores is [seq_len x batch_size], so flip and mask all padding
         align_scores = align_scores.permute(1, 0)
-        align_scores = align_scores.masked_fill(enc_ctxt_mask==1, -np.inf)
+        align_scores.data.masked_fill_(enc_ctxt_mask, -np.inf)
 
         align_weights = F.softmax(align_scores, dim=-1).unsqueeze(1)
         # align_weights is [batch_size x seq_len x 1] where each entry is score over sequence
-
 
         # Note: If input is a (b×n×m) tensor, mat2 is a (b×m×p) tensor
         #  --- out will be a (b×n×p) tensor.

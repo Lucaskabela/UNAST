@@ -31,13 +31,16 @@ def compute_per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengt
         
     return wer(gt_sents, hyp_sents)
 
+def compare_outputs(ground_truth, hypothesis, gt_len, hyp_len):
+    print(f'Model prediction of length {hyp_len} ', sequence_to_text(hypothesis.tolist()[:hyp_len]))
+    print(f'Ground Truth of length {gt_len} ', sequence_to_text(ground_truth.tolist()[:gt_len]))
 
 def noise_fn(to_noise, mask_p=.3, swap_p=0):
     """
-    to_noise should be [batch x seq_len x dim], and we want to hide entire swaths
+    to_noise should be [batch x seq_len x dim], and we operate on timesteps
     of the sequence
     """
-    # NOTE: swap_p does nothing!
+    # NOTE: swap_p does nothing as of right now!
     gen = torch.zeros((to_noise.shape[0], to_noise.shape[1]), device=to_noise.device)
     gen.fill_(1-mask_p)
     zero_mask = torch.bernoulli(gen).unsqueeze(-1)
@@ -103,14 +106,14 @@ def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):
         'optimizer': optimizer.state_dict(),
     }
 
-    f_path = checkpoint_path + '/model_{}.ckpt'.format(state['epoch'])
     # save checkpoint data to the path given, checkpoint_path
+    f_path = checkpoint_path + '/model_most_recent.ckpt'
     torch.save(state, f_path)
     # if it is a best model, min validation loss
     if is_best:
         best_fpath = checkpoint_path + '/model_best.ckpt'
         # copy that checkpoint file to best path given, best_model_path
-        shutil.copyfile(f_path, best_fpath)
+        torch.save(state, best_fpath)
 
 
 def load_ckp(checkpoint_fpath, model, optimizer):
@@ -119,6 +122,9 @@ def load_ckp(checkpoint_fpath, model, optimizer):
     model: model that we want to load checkpoint parameters into       
     optimizer: optimizer we defined in previous training
     """
+    if not os.path.exists(checkpoint_fpath):
+        raise Exception("There is no model at the desired checkpoint")
+    
     # load check point
     checkpoint = torch.load(checkpoint_fpath)
 
