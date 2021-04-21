@@ -142,7 +142,9 @@ class SpeechPostnet(nn.Module):
 
         self.dropout1 = nn.Dropout(p=p)
         self.dropout_list = nn.ModuleList([nn.Dropout(p=p) for _ in range(3)])
+
         self.stop_linear = nn.Linear(num_mels, 1)
+        self.linear_project = nn.Linear(num_mels, num_mels)
 
     def forward(self, input_):
         """
@@ -151,13 +153,17 @@ class SpeechPostnet(nn.Module):
                        as we change the shape ourselves
         """
         # Causal Convolution (for auto-regressive)
-        stop_pred = self.stop_linear(input_)
         input_ = input_.permute(0, 2, 1)
         input_ = self.dropout1(torch.tanh(self.pre_batchnorm(self.conv1(input_)[:, :, :-4])))
         for batch_norm, conv, dropout in zip(self.batch_norm_list, self.conv_list, self.dropout_list):
             input_ = dropout(torch.tanh(batch_norm(conv(input_)[:, :, :-4])))
         input_ = self.conv2(input_)[:, :, :-4]
-        return input_, stop_pred
+        input_ = input_.permute(0, 2, 1)
+        return input_
+
+    def mel_and_stop(self, decoder_out):
+            return self.linear_project(decoder_out), self.stop_linear(decoder_out)
+
 
 
 class TextPrenet(nn.Module):
@@ -168,7 +174,7 @@ class TextPrenet(nn.Module):
     convolutional networks. Should be the same as Ren's paper
     since it outputs an embedding of size 256 for each phoneme.
     """
-    def __init__(self, embedding_size, num_hidden):
+    def __init__(self, embedding_size, num_hidden, p=0.5):
         """
         :param embedding_size: phoneme embedding size
         :param num_hidden: output embedding size
@@ -198,39 +204,37 @@ class TextPrenet(nn.Module):
         self.batch_norm2 = nn.BatchNorm1d(num_hidden)
         self.batch_norm3 = nn.BatchNorm1d(num_hidden)
 
-        self.dropout1 = nn.Dropout(p=0.2)
-        self.dropout2 = nn.Dropout(p=0.2)
-        self.dropout3 = nn.Dropout(p=0.2)
-        self.projection = Linear(num_hidden, num_hidden)
+        self.emb_dropout = nn.Dropout(p=p)
+        self.dropout1 = nn.Dropout(p=p)
+        self.dropout2 = nn.Dropout(p=p)
+        self.dropout3 = nn.Dropout(p=p)
 
     def forward(self, input_):
         """
         :param input_: Tensor of Phoneme IDs (text)
         """
-        input_ = self.embed(input_)
+        input_ = self.emb_dropout(self.embed(input_))
         input_ = input_.transpose(1, 2)
         input_ = self.dropout1(torch.relu(self.batch_norm1(self.conv1(input_))))
         input_ = self.dropout2(torch.relu(self.batch_norm2(self.conv2(input_))))
         input_ = self.dropout3(torch.relu(self.batch_norm3(self.conv3(input_))))
         input_ = input_.transpose(1, 2)
-        input_ = self.projection(input_)
         return input_
 
 class TextPostnet(nn.Module):
     """
 
     """
-    def __init__(self, d_out, hidden):
+    def __init__(self, d_out, hidden, p=.2):
         super(TextPostnet, self).__init__()
-        self.fc1 = nn.Linear(d_out, hidden)
-        self.dropout1 = nn.Dropout(p=0.2)
-        self.fc2 = nn.Linear(hidden, len(symbols))
+        self.fc1 = nn.Linear(d_out, len(symbols))
+        self.dropout1 = nn.Dropout(p=p)
 
     def forward(self, decode_out):
         """
         Need to do log softmax if you want probabilities
         """
-        return self.fc2(self.dropout1(torch.relu(self.fc1(decode_out))))
+        return self.fc1(self.dropout1(decode_out))
 
 class TransformerEncoder(nn.Module):
     # TODO: Fill in from TTS repo :)
@@ -244,7 +248,7 @@ class TransformerDecoder(nn.Module):
 
 class RNNEncoder(nn.Module):
     # TODO: Write this
-    def __init__(self, d_in, hidden, d_out, dropout=.2, num_layers=1, bidirectional=False):
+    def __init__(self, d_in, hidden, dropout=.2, num_layers=1, bidirectional=False):
         super(RNNEncoder, self).__init__()
         self.hidden = hidden
         self.num_layers = num_layers
@@ -253,9 +257,6 @@ class RNNEncoder(nn.Module):
         # TODO: expirement with something else than LSTM
         self.rnn = nn.LSTM(d_in, hidden, num_layers=num_layers,
             bidirectional=bidirectional, batch_first=True, dropout=dropout)
-
-        # Consider using this?
-        self.hid2out = nn.Linear(self.num_dir * hidden, d_out)
 
         if self.num_dir == 2:
             self.reduce_h_W = nn.Linear(hidden * 2, hidden, bias=True)
@@ -282,10 +283,10 @@ class RNNEncoder(nn.Module):
             h, c = hn[0][:], hn[1][:]
             h_t = (h, c)
 
-        return self.hid2out(output), h_t
+        return output, h_t
 
 class RNNDecoder(nn.Module):
-    def __init__(self, enc_out_size, d_in, hidden, d_out, dropout=.2, num_layers=1, attention=False):
+    def __init__(self, enc_out_size, d_in, hidden, dropout=.2, num_layers=1, attention=False):
         super(RNNDecoder, self).__init__()
 
         self.attention = attention
@@ -301,8 +302,6 @@ class RNNDecoder(nn.Module):
         if self.attention:
             self.attention_layer = LuongGeneralAttention(hidden, enc_out_size)
 
-        self.out_layer = nn.Linear(hidden, d_out)
-
     def forward(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
         # TODO: Check shape here?
         if self.attention:
@@ -315,7 +314,7 @@ class RNNDecoder(nn.Module):
 
         output, hidden = self.rnn(decode_input, hidden_state)
 
-        return self.out_layer(output), hidden
+        return output, hidden
 
 class LuongGeneralAttention(nn.Module):
     def __init__(self, hidden_size, enc_out_size):

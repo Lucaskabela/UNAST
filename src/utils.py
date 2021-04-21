@@ -34,10 +34,10 @@ def compute_per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengt
 
 def noise_fn(to_noise, mask_p=.3, swap_p=0):
     """
-    to_noise should be [batch x seq_len x dim], and we want to hide entire swaths
+    to_noise should be [batch x seq_len x dim], and we operate on timesteps
     of the sequence
     """
-    # NOTE: swap_p does nothing!
+    # NOTE: swap_p does nothing as of right now!
     gen = torch.zeros((to_noise.shape[0], to_noise.shape[1]), device=to_noise.device)
     gen.fill_(1-mask_p)
     zero_mask = torch.bernoulli(gen).unsqueeze(-1)
@@ -119,6 +119,9 @@ def load_ckp(checkpoint_fpath, model, optimizer):
     model: model that we want to load checkpoint parameters into       
     optimizer: optimizer we defined in previous training
     """
+    if not os.path.exists(checkpoint_fpath):
+        raise Exception("There is no model at the desired checkpoint")
+    
     # load check point
     checkpoint = torch.load(checkpoint_fpath)
 

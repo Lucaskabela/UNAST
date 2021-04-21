@@ -70,21 +70,19 @@ class BatchGetter():
 
 def process_batch(batch):
     # Pos_text is unused so don't even bother loading it up
-    character, mel, mel_input, _, pos_mel, text_len = batch
+    character, mel, text_len, mel_len = batch
 
     # send stuff we use a lot to device - this is character, mel, mel_input, and pos_mel
-    character = character.to(DEVICE)
-    mel, mel_input, pos_mel = mel.to(DEVICE), mel_input.to(DEVICE), pos_mel.to(DEVICE)
     gold_mel, gold_char = mel.detach(), character.detach().permute(1, 0)
+    character, mel, = character.to(DEVICE), mel.to(DEVICE)
 
     # stop label should be 1 for length
     # currently, find first nonzero (so pad_idx) in pos_mel, or set to length
     with torch.no_grad():
-        end_mask_max, end_mask_idx = torch.max((pos_mel == PAD_IDX), dim=1)
-        end_mask_idx[end_mask_max == 0] = pos_mel.shape[1] - 1
-        gold_stop = F.one_hot(end_mask_idx, pos_mel.shape[1]).float().detach()
-
-    return (character, mel, mel_input, text_len), (gold_char, gold_mel, gold_stop)
+        gold_stop = F.one_hot(mel_len, mel.shape[1]).float().detach()
+        print(mel_len)
+        print(gold_stop)
+    return (character, mel, text_len, mel_len), (gold_char, gold_mel, gold_stop)
 
 
 #####----- LOSS FUNCTIONS -----#####
@@ -92,7 +90,9 @@ def process_batch(batch):
 def text_loss(gold_char, text_pred):
     return F.cross_entropy(text_pred, gold_char, ignore_index=PAD_IDX)
 
-def speech_loss(gold_mel, stop_label, pred_mel, stop_pred):
+def speech_loss(gold_mel, stop_label, pred_mel, mel_len, stop_pred):
+    # Apply length mask to pred_mel!
+    pred_mel = pred_mel * sent_lens_to_mask(mel_len, pred_mel.shape[1]).detach()
     pred_loss = F.mse_loss(pred_mel, gold_mel)
     stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
     return pred_loss + stop_loss
@@ -107,41 +107,41 @@ def autoencoder_step(model, batch):
     Compute and return the loss for autoencoders
     """
     x, y = process_batch(batch)
-    character, mel, mel_input, _  = x
+    character, mel, _, mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
     text_pred = model.text_ae(character).permute(1, 2, 0)
-    pred, stop_pred = model.speech_ae(mel, mel_input)
+    pred, stop_pred = model.speech_ae(mel)
 
-    s_ae_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
-    t_ae_loss = text_loss(gold_char, text_pred)
+    s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred,  mel_len.to(DEVICE), stop_pred)
+    t_ae_loss = text_loss(gold_char.to(DEVICE), text_pred)
     return t_ae_loss, s_ae_loss
 
 def supervised_step(model, batch):
     x, y = process_batch(batch)
-    character, mel, mel_input, _  = x
+    character, mel, _, mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
-    pred, stop_pred = model.tts(character, mel_input)
+    pred, stop_pred = model.tts(character, mel)
     text_pred = model.asr(character, mel).permute(1, 2, 0)
 
-    tts_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
-    asr_loss = text_loss(gold_char, text_pred)
+    tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len.to(DEVICE), stop_pred)
+    asr_loss = text_loss(gold_char.to(DEVICE), text_pred)
     return asr_loss, tts_loss
 
 def crossmodel_step(model, batch):
     #NOTE: not sure if this will fail bc multiple grads on the model...
     x, y = process_batch(batch)
-    character, mel, mel_input, _  = x
+    character, mel, _,  mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
     # Do speech!
-    pred, stop_pred = model.cm_speech_in(mel, mel_input)
-    s_cm_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
+    pred, stop_pred = model.cm_speech_in(mel)
+    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len.to(DEVICE), stop_pred)
 
     # Now do text!
     text_pred = model.cm_text_in(character).permute(1, 2, 0)
-    t_cm_loss = text_loss(gold_char, text_pred)
+    t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred)
     return t_cm_loss, s_cm_loss
 
 
@@ -182,17 +182,17 @@ def train_ae_step(losses, model, optimizer, batch, args):
 def train_cm_step(losses, model, optimizer, batch, args):
     # NOTE: do not use cross_model here bc need to take optimizer step inbetween
     x, y = process_batch(batch)
-    character, mel, mel_input, _  = x
+    character, mel, _, mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
     # Do speech!
-    pred, stop_pred = model.cm_speech_in(mel, mel_input)
-    s_cm_loss = speech_loss(gold_mel, gold_stop, pred, stop_pred)
+    pred, stop_pred = model.cm_speech_in(mel)
+    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred,  mel_len.to(DEVICE), stop_pred)
     optimizer_step(s_cm_loss, model, optimizer, args)
 
     # Now do text!
     text_pred = model.cm_text_in(character).permute(1, 2, 0)
-    t_cm_loss = text_loss(gold_char, text_pred)
+    t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred)
     optimizer_step(t_cm_loss, model, optimizer, args)
 
     # Log losses
@@ -214,7 +214,7 @@ def evaluate(model, valid_dataloader):
         per, n_iters = 0, 0
 
         for batch in valid_dataloader:
-            character, mel, mel_input, pos_text, pos_mel, text_len = batch
+            character, mel, text_len, _ = batch
 
             t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
             losses['t_ae'].append(t_ae_loss.detach().cpu().item())
@@ -230,9 +230,10 @@ def evaluate(model, valid_dataloader):
 
             text_pred = model.asr(None, mel.to(DEVICE), infer=True).squeeze()
             len_mask_max, len_mask_idx = torch.max((text_pred == PAD_IDX), dim=1)
-            len_mask_idx[len_mask_max == 0] = text_pred.shape[1] - 1
+            len_mask_idx[len_mask_max == 0] = text_pred.shape[1]
             per += compute_per(character.to(DEVICE), text_pred, text_len.to(DEVICE), len_mask_idx)
             n_iters += 1
+
     # TODO: evaluate speech inference somehow?
     return per/n_iters, losses
 
@@ -290,8 +291,9 @@ def train(args):
         log_loss_metrics(losses, epoch)
         per, eval_losses = evaluate(model, valid_dataloader)
         log_loss_metrics(eval_losses, epoch, eval=True)
+        print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
         if per < best:
-            print("Saving model! with PER {:0.3f}\%".format(per*100))
+            print("\t Best score - saving model!")
             best = per
             save_ckp(epoch, per, model, optimizer, True, args.checkpoint_path)
     model.eval()

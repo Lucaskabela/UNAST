@@ -28,6 +28,7 @@ def raw_text_to_phoneme_ids(text: str) -> List[int]:
   clean_text = _clean_text(text, ['english_cleaners'])
   phonemes = ipa.convert(clean_text)
   sequence = _symbols_to_sequence(phonemes)
+  sequence.append(_symbol_to_id['~'])
   return sequence
 
 
