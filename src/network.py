@@ -164,7 +164,7 @@ class SpeechRNN(AutoEncoderNet):
         self.prenet = SpeechPrenet(args.num_mels, args.s_pre_hid, args.e_in, p=args.s_pre_drop)
         self.encoder = RNNEncoder(args.e_in, args.hidden, dropout=args.e_drop, 
             num_layers=args.num_layers, bidirectional=args.e_bi)
-        self.decoder = RNNDecoder(args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop, 
+        self.decoder = RNNDecoder(args.e_in, args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop, 
             num_layers=args.num_layers, attention=args.d_attn, attn_dim=args.attn_dim)
         self.postnet = SpeechPostnet(args.num_mels, args.hidden, p=args.s_post_drop)
     
@@ -292,7 +292,7 @@ class TextRNN(AutoEncoderNet):
         self.prenet = TextPrenet(args.t_emb_dim, args.e_in, p=args.t_pre_drop)
         self.encoder = RNNEncoder(args.e_in, args.hidden, dropout=args.e_drop, 
             num_layers=args.num_layers, bidirectional=args.e_bi)
-        self.decoder = RNNDecoder(args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop, 
+        self.decoder = RNNDecoder(args.e_in, args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop, 
             num_layers=args.num_layers, attention=args.d_attn, attn_dim=args.attn_dim)
         self.postnet = TextPostnet(args.hidden, args.t_post_drop)
 
