@@ -225,7 +225,7 @@ class TextPostnet(nn.Module):
     """
 
     """
-    def __init__(self, d_out, hidden, p=.2):
+    def __init__(self, hidden, p=.2):
         super(TextPostnet, self).__init__()
         self.fc1 = nn.Linear(hidden, len(symbols))
         self.dropout1 = nn.Dropout(p=p)
@@ -286,23 +286,25 @@ class RNNEncoder(nn.Module):
         return output, h_t
 
 class RNNDecoder(nn.Module):
-    def __init__(self, enc_out_size, d_in, hidden, dropout=.2, num_layers=1, attention=False):
+    def __init__(self, enc_out_size, hidden, dropout=.2, num_layers=1, attention=False, attn_dim=0):
         super(RNNDecoder, self).__init__()
 
         self.attention = attention
         if self.attention:
-            self.input_size = enc_out_size + d_in
+            self.input_size = enc_out_size + hidden
         else:
-            self.input_size = d_in
+            self.input_size = hidden
 
         self.rnn = nn.LSTM(self.input_size, hidden, num_layers=num_layers,
             batch_first=True, dropout=dropout)
 
-        # Luong attention TODO: ADD DROPOUT!?
         if self.attention:
-            self.attention_layer = LuongGeneralAttention(hidden, enc_out_size)
-            # self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attention_dim, attention_location_n_filters, attention_location_kernel_size)
-            
+            self.attention_layer = LuongGeneralAttention(hidden, enc_out_size, attn_dim)
+            # self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
+            self.linear_projection(self.input_size, hidden)
+            self.dropout1 = nn.Dropout(p=dropout)
+
+
     def forward(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
         # TODO: Check shape here?
         if self.attention:
@@ -314,7 +316,9 @@ class RNNDecoder(nn.Module):
             decode_input = embed_decode
 
         output, hidden = self.rnn(decode_input, hidden_state)
-
+        # TODO: Use attention term here - requires changing linears 2x larger...
+        if self.attention:
+            output = self.dropout1(self.linear_projection(torch.cat((output, attn_W), dim=-1)))
         return output, hidden
 
 
@@ -336,14 +340,13 @@ class LocationLayer(nn.Module):
         processed_attention = self.location_dense(processed_attention)
         return processed_attention
 
-# Typical values:         attention_dim=128,        attention_location_n_filters=32,        attention_location_kernel_size=31,
 class LocationSensitiveAttention(nn.Module):
-    def __init__(self, attention_rnn_dim, embedding_dim, attention_dim,
-                 attention_location_n_filters, attention_location_kernel_size):
+    def __init__(self, hidden_dim, encoder_dim, attention_dim,
+                 attention_location_n_filters=32, attention_location_kernel_size=31):
         super(Attention, self).__init__()
-        self.query_layer = LinearNorm(attention_rnn_dim, attention_dim,
+        self.query_layer = LinearNorm(hidden_dim, attention_dim,
                                       bias=False, w_init_gain='tanh')
-        self.memory_layer = LinearNorm(embedding_dim, attention_dim, bias=False,
+        self.memory_layer = LinearNorm(encoder_dim, attention_dim, bias=False,
                                        w_init_gain='tanh')
         self.v = LinearNorm(attention_dim, 1, bias=False)
         self.location_layer = LocationLayer(attention_location_n_filters,
@@ -391,7 +394,7 @@ class LocationSensitiveAttention(nn.Module):
             hidden_state, self.processed_memory, self.attention_cat)
 
         if mask is not None:
-            alignment.data.masked_fill_(~mask, self.score_mask_value)
+            alignment.data.masked_fill_(mask, self.score_mask_value)
 
         attention_weights = F.softmax(alignment, dim=1).unsqueeze(1)
         self.attention_cat += attention_weights
@@ -422,7 +425,7 @@ class LuongGeneralAttention(nn.Module):
         align_scores = self.fc2(torch.tanh(self.fc1(combined))).squeeze(-1)
         # align_scores is [seq_len x batch_size], so flip and mask all padding
         align_scores = align_scores.permute(1, 0)
-        align_scores.data.masked_fill_(~enc_ctxt_mask, -np.inf)
+        align_scores.data.masked_fill_(enc_ctxt_mask, -np.inf)
 
         align_weights = F.softmax(align_scores, dim=-1).unsqueeze(1)
         # align_weights is [batch_size x seq_len x 1] where each entry is score over sequence

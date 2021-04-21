@@ -154,12 +154,12 @@ class SpeechRNN(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
     def __init__(self, args):
         super(SpeechRNN, self).__init__()
-        self.prenet = SpeechPrenet(args.num_mels, args.hidden, args.e_in)
-        self.encoder = RNNEncoder(args.e_in, args.hidden, 
-            dropout=args.e_p, num_layers=args.e_layers, bidirectional=args.e_bi)
-        self.decoder = RNNDecoder(args.hidden * self.encoder.num_dir, args.d_in, args.hidden, 
-            dropout=args.d_p, num_layers=args.d_layers, attention=args.d_attn)
-        self.postnet = SpeechPostnet(args.num_mels, args.hidden)
+        self.prenet = SpeechPrenet(args.num_mels, args.s_pre_hid, args.e_in, p=args.s_pre_drop)
+        self.encoder = RNNEncoder(args.e_in, args.hidden, dropout=args.e_drop, 
+            num_layers=args.num_layers, bidirectional=args.e_bi)
+        self.decoder = RNNDecoder(args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop, 
+            num_layers=args.num_layers, attention=args.d_attn, attn_dim=args.attn_dim)
+        self.postnet = SpeechPostnet(args.num_mels, args.hidden, p=args.s_post_drop)
     
 
     def preprocess(self, raw_input_tensor):
@@ -278,12 +278,12 @@ class TextRNN(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
     def __init__(self, args):
         super(TextRNN, self).__init__()
-        self.prenet = TextPrenet(args.embed_dim, args.e_in)
-        self.encoder = RNNEncoder(args.e_in, args.hidden, 
-            dropout=args.e_p, num_layers=args.e_layers, bidirectional=args.e_bi)
-        self.decoder = RNNDecoder(args.hidden * self.encoder.num_dir, args.d_in, args.hidden, 
-            dropout=args.d_p, num_layers=args.d_layers, attention=args.d_attn)
-        self.postnet = TextPostnet(args.d_out, args.hidden)
+        self.prenet = TextPrenet(args.t_emb_dim, args.e_in, p=args.t_pre_drop)
+        self.encoder = RNNEncoder(args.e_in, args.hidden, dropout=args.e_drop, 
+            num_layers=args.num_layers, bidirectional=args.e_bi)
+        self.decoder = RNNDecoder(args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop, 
+            num_layers=args.num_layers, attention=args.d_attn, attn_dim=args.attn_dim)
+        self.postnet = TextPostnet(args.hidden, args.t_post_drop)
 
     def preprocess(self, raw_input_tensor):
         # raw_input_tensor should be a LongTensor of size [batch_size x seq_len x 1]
