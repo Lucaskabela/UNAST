@@ -20,7 +20,7 @@ from collections import defaultdict
 from data import sequence_to_text
 import math
 
-# DEVICE is only global variable
+# DEVICE, TEACHER is only global variable
 
 class BatchGetter():
     def __init__(self, args, supervised_dataset, unsupervised_dataset, full_dataset):
@@ -246,13 +246,16 @@ def train(args):
             batch_size=args.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
             num_workers=args.num_workers)
+    batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
+
     s_epoch, best, model, optimizer = initialize_model(args)
+    milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
+    sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
+
     print("Training model with {} parameters".format(model.num_params()))
     per, eval_losses = evaluate(model, valid_dataloader)
     log_loss_metrics(eval_losses, -1, eval=True)
-    milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
-    sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
-    batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
+
     for epoch in range(s_epoch, args.epochs):
         model.train()
         losses = defaultdict(list)
@@ -296,6 +299,7 @@ def train(args):
         per, eval_losses = evaluate(model, valid_dataloader)
         log_loss_metrics(eval_losses, epoch, eval=True)
         sched.step()
+        model.teacher.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
         save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
         if per < best:
@@ -410,7 +414,7 @@ def initialize_model(args):
     """
         Using args, initialize starting epoch, best per, model, optimizer
     """
-    text_m, speech_m, discriminator = None, None, None
+    text_m, speech_m, discriminator, teacher = None, None, None, get_teacher_ratio(args)
     if args.model_type == 'rnn':
         text_m = TextRNN(args).to(DEVICE)
         speech_m = SpeechRNN(args).to(DEVICE)
@@ -421,7 +425,7 @@ def initialize_model(args):
     if args.use_discriminator:
         # TODO: Fill it in
         pass
-    model = UNAST(text_m, speech_m, discriminator)
+    model = UNAST(text_m, speech_m, discriminator, teacher)
 
     # initialize optimizer
     optimizer = None
@@ -434,6 +438,7 @@ def initialize_model(args):
         s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
         s_epoch = s_epoch + 1
 
+    model.teacher.iter = s_epoch
     return s_epoch, best, model, optimizer
 
 def initialize_datasets(args):

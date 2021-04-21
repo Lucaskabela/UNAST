@@ -86,37 +86,41 @@ class AutoEncoderNet(nn.Module):
 
 
 class UNAST(nn.Module):
-    def __init__(self, text_m, speech_m, discriminator=None):
+    def __init__(self, text_m, speech_m, discriminator=None, teacher=None):
         """NOTE: text_m and speech_m should be same type (RNN or Transformer)"""
         super(UNAST, self).__init__()
         self.text_m = text_m
         self.speech_m = speech_m
         self.discriminator = discriminator
+        self.teacher = teacher
 
     def text_ae(self, character_input):
-        return self.text_m.forward(character_input, noise_in=True)
+        return self.text_m.forward(character_input, noise_in=True, teacher_ratio=self.teacher.get_val())
     
     def speech_ae(self, mel):
-        return self.speech_m.forward(mel, noise_in=True)
+        return self.speech_m.forward(mel, noise_in=True, teacher_ratio=self.teacher.get_val())
 
     def cm_text_in(self, character_input):
         t_e_o, t_hid, t_pad_mask = self.text_m.encode(character_input)
         pred, _ = self.speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
         cm_s_e_o, cm_s_hid, cm_s_pad_mask = self.speech_m.encode(pred)
-        text_pred = self.text_m.decode_sequence(character_input, cm_s_hid, cm_s_e_o, cm_s_pad_mask)
+        text_pred = self.text_m.decode_sequence(character_input, cm_s_hid, cm_s_e_o, 
+            cm_s_pad_mask, teacher_ratio=self.teacher.get_val())
         return text_pred
 
     def cm_speech_in(self, mel):
         s_e_o, s_hid, s_pad_mask = self.speech_m.encode(mel)
         text_pred = self.text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
         cm_t_e_o, cm_t_hid, cm_t_pad_mask = self.text_m.encode(text_pred)
-        pred, stop_pred = self.speech_m.decode_sequence(mel, cm_t_hid, cm_t_e_o, cm_t_pad_mask)
+        pred, stop_pred = self.speech_m.decode_sequence(mel, cm_t_hid, cm_t_e_o, 
+            cm_t_pad_mask, teacher_ratio=self.teacher.get_val())
         return pred, stop_pred
     
     def tts(self, character, mel, infer=False):
         t_e_o, t_hid, t_pad_mask = self.text_m.encode(character)
         if not infer:
-            pred, stop_pred = self.speech_m.decode_sequence(mel, t_hid, t_e_o, t_pad_mask)
+            pred, stop_pred = self.speech_m.decode_sequence(mel, t_hid, t_e_o, 
+                t_pad_mask, teacher_ratio=self.teacher.get_val())
         else:
             pred, stop_pred = self.speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
         return pred, stop_pred
@@ -124,7 +128,8 @@ class UNAST(nn.Module):
     def asr(self, character, mel, infer=False):
         s_e_o, s_hid, s_pad_mask = self.speech_m.encode(mel)
         if not infer:
-            text_pred = self.text_m.decode_sequence(character, s_hid, s_e_o, s_pad_mask)
+            text_pred = self.text_m.decode_sequence(character, s_hid, s_e_o, 
+                s_pad_mask, teacher_ratio=self.teacher.get_val())
         else:
             text_pred = self.text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
         return text_pred
@@ -280,9 +285,9 @@ class SpeechRNN(AutoEncoderNet):
     def postprocess(self, dec_output, distrib=False):
         return self.postnet(dec_output)
 
-    def forward(self, mel, noise_in=False):
+    def forward(self, mel, noise_in=False, teacher_ratio=1):
         encoder_outputs, latent_hidden, pad_mask = self.encode(mel, noise_in=noise_in)
-        pred, stop_pred = self.decode_sequence(mel, latent_hidden, encoder_outputs, pad_mask)
+        pred, stop_pred = self.decode_sequence(mel, latent_hidden, encoder_outputs, pad_mask, teacher_ratio)
         return pred, stop_pred
         
 class TextTransformer(AutoEncoderNet):
@@ -405,7 +410,7 @@ class TextRNN(AutoEncoderNet):
         res = res * pad_mask
         return res
 
-    def forward(self, input_, noise_in=False):
+    def forward(self, input_, noise_in=False, teacher_ratio=1):
         encoder_outputs, latent_hidden, pad_mask = self.encode(input_, noise_in=noise_in)
-        pred = self.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask)
+        pred = self.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask, teacher_ratio)
         return pred

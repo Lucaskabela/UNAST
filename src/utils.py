@@ -86,6 +86,28 @@ def init_logger(log_dir=None):
         valid_logger = tb.SummaryWriter(path.join(log_dir, "valid"))
     return train_logger, valid_logger
 
+class TeacherRatio():
+    def __init__(self, args):
+        self.iter = 0
+        self.val = args.teacher_init_val
+        self.gamma = args.teacher_gamma
+        self.start_step = args.teacher_decay_start
+        self.stop_step = args.teacher_decay_end
+    
+    def step():
+        print("On step:", self.iter)
+        self.iter += 1
+
+    def get_val():
+        # Do not change val in case user loads w/iter
+        if self.start_step <= self.iter:
+            power = min(self.iter, self.stop_step) - self.start_step
+            return self.val * (self.gamma ** power)
+        else:
+            return self.val
+            
+def get_teacher_ratio(args):
+    return TeacherRatio(args)
 
 # Next two methods courtesy of: https://towardsdatascience.com/how-to-save-and-load-a-model-in-pytorch-with-a-complete-example-c2920e617dee
 def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):
