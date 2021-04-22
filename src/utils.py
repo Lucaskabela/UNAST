@@ -57,7 +57,10 @@ def specaugment(mel, mel_len, freq_mask=20, time_mask=100, replace_with_zero=Fal
             mean_ = res[i].mean()
             f = freq_len[i].item()
             t = time_len[i].item()
-
+            # Make sure mel_len[i] - t > 0!!
+            if mel_len[i] - t <= 0:
+                # new t should just be less than half the length, why not
+                t = random.randrange(0, mel_len[i] // 2)
             f_zero = random.randrange(0, mel_len[i]- f)
             t_zero = random.randrange(0, mel_len[i]- t)
             if replace_with_zero:

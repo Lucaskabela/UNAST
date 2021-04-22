@@ -35,7 +35,7 @@
     "e_bi": true,
     "d_drop": 0.3,
     "d_attn": true,
-    "las": true,
+    "attn_type": "lsa",
     "attn_dim": 32,
     "num_workers": 4,
     "load_path": null,
