@@ -343,8 +343,8 @@ class TextRNN(AutoEncoderNet):
         for i in range(max_out_len):
             dec_out, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             out_list.append(dec_out)
-            outputs = torch.stack(out_lost, dim=1).squeeze(2)
-            out_list = outputs
+            outputs = torch.stack(out_list, dim=1).squeeze(2)
+            out_list = [outputs]
             if random.random() < teacher_ratio:
                 input_ = target[:, 0:i+1]
             else:
@@ -380,7 +380,7 @@ class TextRNN(AutoEncoderNet):
     def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=300):
 
         batch_size = enc_output.shape[0]
-        outputs = []
+        out_list = []
         seq_lens = torch.zeros(batch_size, device=enc_output.device)
         
         # get a all SOS for first timestep
@@ -392,7 +392,7 @@ class TextRNN(AutoEncoderNet):
         while keep_gen:
             dec_out, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             out_list.append(torch.argmax(dec_out, dim=-1))
-            outputs = torch.stack(out_lost, dim=1).squeeze(2)
+            outputs = torch.stack(out_list, dim=1).squeeze(2)
             # set stop_lens here!
             out_list = [outputs]
             input_ = outputs
