@@ -343,7 +343,7 @@ class TextRNN(AutoEncoderNet):
         for i in range(max_out_len):
             dec_out, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             out_list.append(dec_out)
-            outputs = torch.stack(out_list, dim=1).squeeze(2)
+            outputs = torch.cat(out_list, dim=1)
             out_list = [outputs]
             if random.random() < teacher_ratio:
                 input_ = target[:, 0:i+1]
@@ -392,7 +392,7 @@ class TextRNN(AutoEncoderNet):
         while keep_gen:
             dec_out, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             out_list.append(torch.argmax(dec_out, dim=-1))
-            outputs = torch.stack(out_list, dim=1).squeeze(2)
+            outputs = torch.cat(out_list, dim=1)
             # set stop_lens here!
             out_list = [outputs]
             input_ = outputs
