@@ -399,7 +399,7 @@ class TextRNN(AutoEncoderNet):
             i += 1
 
             # double check this!
-            stop_mask = (input_ == EOS_IDX).logical_and(seq_lens == 0)
+            stop_mask = (torch.argmax(dec_out, dim=-1).squeeze() == EOS_IDX).logical_and(seq_lens == 0)
             seq_lens[stop_mask] = i
             keep_gen = torch.any(seq_lens.eq(0)) and i < max_len
 
