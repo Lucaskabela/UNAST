@@ -13,7 +13,7 @@
     "teacher_decay_start": 10,
     "teacher_decay_end": 70,
     "grad_clip": 1.0,
-    "batch_size": 64,
+    "batch_size": 16,
     "epoch_steps": 50,
     "ae_steps": 1,
     "cm_steps": 2,
