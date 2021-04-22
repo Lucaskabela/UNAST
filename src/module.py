@@ -359,9 +359,9 @@ class LocationSensitiveAttention(nn.Module):
     def init_memory(self, enc_output):
         self.processed_memory = self.memory_layer(enc_output)
         self.attention_weights_cum = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
-            device=enc_ouptut.device)
+            device=enc_output.device)
         self.attention_weights = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
-            device=enc_ouptut.device)
+            device=enc_output.device)
     
     def clear_memory(self):
         self.processed_memory = None
