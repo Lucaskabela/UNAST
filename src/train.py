@@ -151,15 +151,14 @@ def crossmodel_step(model, batch):
 
 
 #####---- Use these to train on a task -----#####
-def optimizer_step(loss, scaler, model, optimizer, args):
+def optimizer_step(loss, model, optimizer, args):
 
     # Take a optimizer step!
-    scaler.scale(loss).backward()
+    loss.backward()
     if args.grad_clip > 0.0:
         nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
-    scaler.step(optimizer)
+    optimizer.step()
     optimizer.zero_grad(set_to_none=True)
-
 
 def train_sp_step(losses, model, batch):
     batch = process_batch(batch)
@@ -240,7 +239,6 @@ def train(args):
             collate_fn=collate_fn_transformer, drop_last=True,
             num_workers=args.num_workers, pin_memory=True)
     batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
-    scaler = torch.cuda.amp.GradScaler()
 
     s_epoch, best, model, optimizer = initialize_model(args)
     milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
@@ -268,24 +266,23 @@ def train(args):
         bar.set_description("Epoch {}".format(epoch))
         for _ in bar:
             loss = 0
-            with torch.cuda.amp.autocast():
-                # DENOISING AUTO ENCODER
-                for _ in range(0, args.ae_steps):
-                    batch = batch_getter.get_unsupervised_batch()
-                    loss += train_ae_step(losses, model, batch)
+            # DENOISING AUTO ENCODER
+            for _ in range(0, args.ae_steps):
+                batch = batch_getter.get_unsupervised_batch()
+                loss += train_ae_step(losses, model, batch)
 
-                # CM TTS/ASR
-                for _ in range(0, args.cm_steps):
-                    batch = batch_getter.get_unsupervised_batch()
-                    loss += train_cm_step(losses, model, batch)
+            # CM TTS/ASR
+            for _ in range(0, args.cm_steps):
+                batch = batch_getter.get_unsupervised_batch()
+                loss += train_cm_step(losses, model, batch)
 
-                # SUPERVISED
-                for _ in range(0, args.sp_steps):
-                    batch = batch_getter.get_supervised_batch()
-                    loss += train_sp_step(losses, model, batch)
+            # SUPERVISED
+            for _ in range(0, args.sp_steps):
+                batch = batch_getter.get_supervised_batch()
+                loss += train_sp_step(losses, model, batch)
 
             # Gradients have accumulated - lets back prop!
-            optimizer_step(loss, scaler, model, optimizer, args)
+            optimizer_step(loss, model, optimizer, args)
             del loss
             # DISCRIMINATOR
             if args.use_discriminator:
