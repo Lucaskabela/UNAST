@@ -49,11 +49,11 @@ def noise_fn(to_noise, mask_p=.3, swap_p=0):
 def specaugment(mel, mel_len, freq_mask=20, time_mask=100, replace_with_zero=False):
     # No timewarp because I don't hate myself that much
     with torch.no_grad():
-        res = speech.detach().clone()
-        freq_len = torch.randint(0, freq_mask, (speech.shape[0]))
-        time_len = torch.randint(0, time_mask, (speech.shape[0]))
+        res = mel.detach().clone()
+        freq_len = torch.randint(0, freq_mask, mel_len.shape)
+        time_len = torch.randint(0, time_mask, mel_len.shape)
 
-        for i in freq_len.shape[0]:
+        for i in range(freq_len.shape[0]):
             mean_ = res[i].mean()
             f = freq_len[i].item()
             t = time_len[i].item()

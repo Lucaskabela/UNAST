@@ -303,7 +303,7 @@ class TextRNN(AutoEncoderNet):
         self.prenet = TextPrenet(args.t_emb_dim, args.e_in, p=args.t_pre_drop)
         self.encoder = RNNEncoder(args.e_in, args.hidden, dropout=args.e_drop, 
             num_layers=args.num_layers, bidirectional=args.e_bi)
-        self.decoder = RNNDecoder(args.t_emb_dim, args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop, 
+        self.decoder = RNNDecoder(args.e_in, args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop, 
             num_layers=args.num_layers, attention=args.d_attn, attn_dim=args.attn_dim)
         self.postnet = TextPostnet(args.hidden, args.t_post_drop)
 
@@ -337,16 +337,18 @@ class TextRNN(AutoEncoderNet):
         """
         batch_size, max_out_len = target.shape[0], target.shape[1]
         outputs = []
-        input_ = torch.tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long)
+        input_ = torch.tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long).unsqueeze(1)
         if self.decoder.las:
             self.decoder.attention_layer.init_memory(enc_output)
         for i in range(max_out_len):
             dec_out, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             outputs.append(dec_out)
             if random.random() < teacher_ratio:
-                input_ = target[:, i]
+                input_ = target[:, 0:i+1]
+                # input_ = target[:, i]
             else:
-                input_ = torch.argmax(dec_out, dim=-1).squeeze()
+                input_ = torch.argmax( torch.stack(outputs, dim=1).squeeze(2), dim=-1)
+                # input_ = torch.argmax(dec_out, dim=-1).squeeze()
         if self.decoder.las:
             self.decoder.attention_layer.clear_memory()
         return torch.stack(outputs, dim=1).squeeze(2)
@@ -362,7 +364,7 @@ class TextRNN(AutoEncoderNet):
                 + For speech, dim will be the ??? which is something log filter related
             - dec_hidden: (h_n, c_n) from decoder LSTM
         """
-        input_embed = self.prenet.emb_dropout(self.prenet.embed(input_).unsqueeze(1))
+        input_embed = self.prenet(input_)[:, -1, :].unsqueeze(1)
         dec_output, dec_hidden = self.decoder(input_embed, hidden_state, enc_output, enc_ctxt_mask)
         return self.postprocess(dec_output), dec_hidden
 
@@ -382,21 +384,23 @@ class TextRNN(AutoEncoderNet):
         seq_lens = torch.zeros(batch_size, device=enc_output.device)
         
         # get a all SOS for first timestep
-        input_ = torch.tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long)
+        input_ = torch.tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long).unsqueeze(1)
         i = 0
         keep_gen = torch.any(seq_lens.eq(0)) and i < max_len
         if self.decoder.las:
             self.decoder.attention_layer.init_memory(enc_output)
         while keep_gen:
             dec_out, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
-            input_ = torch.argmax(dec_out, dim=-1)
+            #input_ = torch.argmax(dec_out, dim=-1)
             # set stop_lens here!
-            outputs.append(input_)
-            input_ = input_.squeeze()
+            # outputs.append(input_)
+            outputs.append(torch.argmax(dec_out, dim=-1))
+            input_ = torch.stack(outputs, dim=1).squeeze(2)
             i += 1
 
             # double check this!
-            stop_mask = (input_ == EOS_IDX).logical_and(seq_lens == 0)
+            #stop_mask = (input_ == EOS_IDX).logical_and(seq_lens == 0)
+            stop_mask = (outputs[-1].squeeze() == EOS_IDX).logical_and(seq_lens == 0)
             seq_lens[stop_mask] = i
             keep_gen = torch.any(seq_lens.eq(0)) and i < max_len
 
