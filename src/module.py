@@ -399,7 +399,7 @@ class LocationSensitiveAttention(nn.Module):
         attention_weights_cat: previous and cummulative attention weights
         mask: binary mask for padded data - 1 for no padding, 0 for padding
         """
-        attention_cat = torch.cat((attention_weights.unsqueeze(1),
+        attention_cat = torch.cat((self.attention_weights.unsqueeze(1),
              self.attention_weights_cum.unsqueeze(1)), dim=1)
 
         alignment = self.get_alignment_energies(
@@ -409,8 +409,8 @@ class LocationSensitiveAttention(nn.Module):
             alignment.data.masked_fill_(mask, self.score_mask_value)
 
         self.attention_weights = F.softmax(alignment, dim=1)
-        self.attention_weights_cum += attention_weights
-        ctxt = torch.bmm(attention_weights.unsqueeze(1), memory)
+        self.attention_weights_cum += self.attention_weights
+        ctxt = torch.bmm(self.attention_weights.unsqueeze(1), memory)
         return ctxt
 
 class LuongGeneralAttention(nn.Module):
