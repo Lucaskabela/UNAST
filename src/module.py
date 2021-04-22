@@ -286,11 +286,10 @@ class RNNEncoder(nn.Module):
         return output, h_t
 
 class RNNDecoder(nn.Module):
-    def __init__(self, d_in, enc_out_size, hidden, dropout=.2, num_layers=1, attention=False, attn_dim=0, attn_type="lsa"):
+    def __init__(self, d_in, enc_out_size, hidden, dropout=.2, num_layers=1, attention=None, attn_dim=0):
         super(RNNDecoder, self).__init__()
 
         self.attention = attention
-        self.attn_type = attn_type
         if self.attention:
             self.input_size = enc_out_size + d_in
         else:
@@ -299,10 +298,10 @@ class RNNDecoder(nn.Module):
         self.rnn = nn.LSTM(self.input_size, hidden, num_layers=num_layers,
             batch_first=True, dropout=dropout)
 
-        if self.attention:
-            if attn_type == "lsa":
+        if self.attention is not None:
+            if self.attention == "lsa":
                 self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
-            elif attn_type == "luong":
+            elif self.attention == "luong":
                 self.attention_layer = LuongGeneralAttention(hidden, enc_out_size, attn_dim)
             # self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
             self.linear_projection = Linear(enc_out_size + hidden, hidden, w_init='tanh')

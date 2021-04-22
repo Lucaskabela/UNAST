@@ -36,7 +36,7 @@
     "num_layers": 1,
     "e_bi": false,
     "d_drop": 0.3,
-    "d_attn": false,
+    "d_attn": null,
     "attn_dim": 128,
     "grad_clip": 1.0,
     "num_workers": 4,
