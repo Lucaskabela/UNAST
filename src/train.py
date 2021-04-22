@@ -123,7 +123,8 @@ def supervised_step(model, batch):
     gold_char, gold_mel, gold_stop = y
 
     pred, stop_pred = model.tts(character, mel)
-    text_pred = model.asr(character, mel).permute(1, 2, 0)
+    mel_aug = specaugment(mel, mel_len)
+    text_pred = model.asr(character, mel_aug).permute(1, 2, 0)
 
     tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len.to(DEVICE), stop_pred)
     asr_loss = text_loss(gold_char.to(DEVICE), text_pred)

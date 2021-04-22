@@ -46,6 +46,28 @@ def noise_fn(to_noise, mask_p=.3, swap_p=0):
     zero_mask = torch.bernoulli(gen).unsqueeze(-1)
     return to_noise * zero_mask
 
+def specaugment(mel, mel_len, freq_mask=20, time_mask=100, replace_with_zero=False):
+    # No timewarp because I don't hate myself that much
+    with torch.no_grad():
+        res = speech.detach().clone()
+        freq_len = torch.randint(0, freq_mask, (speech.shape[0]))
+        time_len = torch.randint(0, time_mask, (speech.shape[0]))
+
+        for i in freq_len.shape[0]:
+            mean_ = res[i].mean()
+            f = freq_len[i].item()
+            t = time_len[i].item()
+
+            f_zero = random.randrange(0, mel_len[i]- f)
+            t_zero = random.randrange(0, mel_len[i]- t)
+            if replace_with_zero:
+                res[i][:][f_zero:f_zero+f] = 0
+                res[i][t_zero:t_zero+t][:] = 0
+            else:
+                res[i][:][f_zero:f_zero+f] = mean_
+                res[i][t_zero:t_zero+t][:] = mean_
+
+    return res
 
 def sent_lens_to_mask(lens, max_length):
     """
@@ -94,11 +116,11 @@ class TeacherRatio():
         self.start_step = args.teacher_decay_start
         self.stop_step = args.teacher_decay_end
     
-    def step():
+    def step(self):
         print("On step:", self.iter)
         self.iter += 1
 
-    def get_val():
+    def get_val(self):
         # Do not change val in case user loads w/iter
         if self.start_step <= self.iter:
             power = min(self.iter, self.stop_step) - self.start_step
