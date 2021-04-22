@@ -406,8 +406,8 @@ class TextRNN(AutoEncoderNet):
         # Maybe this is a bit overkil...
         if self.decoder.las:
             self.decoder.attention_layer.clear_memory()
-        seq_lens[seq_lens == 0] = len(outputs)
-        pad_mask = sent_lens_to_mask(seq_lens, len(outputs))
+        seq_lens[seq_lens == 0] = outputs.shape[1]
+        pad_mask = sent_lens_to_mask(seq_lens, outputs.shape[1])
 
         res = outputs
         res = res * pad_mask
