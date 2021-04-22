@@ -345,7 +345,7 @@ class LocationLayer(nn.Module):
 class LocationSensitiveAttention(nn.Module):
     def __init__(self, hidden_dim, encoder_dim, attention_dim,
                  attention_location_n_filters=32, attention_location_kernel_size=31):
-        super(Attention, self).__init__()
+        super(LocationSensitiveAttention, self).__init__()
         self.query_layer = Linear(hidden_dim, attention_dim,
                                       bias=False, w_init='tanh')
         self.memory_layer = Linear(encoder_dim, attention_dim, bias=False,
