@@ -117,7 +117,6 @@ class TeacherRatio():
         self.stop_step = args.teacher_decay_end
     
     def step(self):
-        print("On step:", self.iter)
         self.iter += 1
 
     def get_val(self):
