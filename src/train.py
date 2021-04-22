@@ -182,7 +182,7 @@ def train_ae_step(losses, model, batch):
 
 def train_cm_step(losses, model, batch):
     batch = process_batch(batch)
-    s_cm_loss, t_cm_loss = crossmodel_step(model, batch)
+    t_cm_loss, s_cm_loss = crossmodel_step(model, batch)
     loss = s_cm_loss + t_cm_loss
 
     # Log losses
