@@ -75,7 +75,7 @@ def process_batch(batch):
     character, mel, text_len, mel_len = batch
 
     # Detach gold labels stuff we use a lot to device
-    gold_mel, gold_char = mel.detach(), character.detach().permute(1, 0)
+    gold_mel, gold_char = mel.detach(), character.detach()
     # stop label should be 1 for length, subtracting 1 for 0 based indexing
     with torch.no_grad():
         gold_stop = F.one_hot(mel_len - 1, mel.shape[1]).float().detach()
@@ -113,7 +113,7 @@ def autoencoder_step(model, batch):
     character, mel, _, mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
-    text_pred = model.text_ae(character).permute(1, 2, 0)
+    text_pred = model.text_ae(character).permute(0, 2, 1)
     pred, stop_pred = model.speech_ae(mel)
 
     # Wait to move these to device until here because memory concerns!
@@ -128,7 +128,7 @@ def supervised_step(model, batch):
 
     pred, stop_pred = model.tts(character, mel)
     mel_aug = specaugment(mel, mel_len)
-    text_pred = model.asr(character, mel_aug).permute(1, 2, 0)
+    text_pred = model.asr(character, mel_aug).permute(0, 2, 1)
 
     tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len, stop_pred)
     asr_loss = text_loss(gold_char.to(DEVICE), text_pred)
@@ -145,7 +145,7 @@ def crossmodel_step(model, batch):
     s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len, stop_pred)
 
     # Now do text!
-    text_pred = model.cm_text_in(character).permute(1, 2, 0)
+    text_pred = model.cm_text_in(character).permute(0, 2, 1)
     t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred)
     return t_cm_loss, s_cm_loss
 
@@ -154,11 +154,11 @@ def crossmodel_step(model, batch):
 def optimizer_step(loss, model, optimizer, args):
 
     # Take a optimizer step!
-    optimizer.zero_grad(set_to_none=True)
     loss.backward()
     if args.grad_clip > 0.0:
         nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
     optimizer.step()
+    optimizer.zero_grad(set_to_none=True)
 
 def train_sp_step(losses, model, batch):
     batch = process_batch(batch)
@@ -339,9 +339,9 @@ def train_text_auto(args):
         for data in dataloader:
             character, mel, mel_input, pos_text, pos_mel, text_len = data
             character = character.to(DEVICE)
-            pred = model.forward(character).permute(1, 2, 0)
+            pred = model.forward(character).permute(0, 2, 1)
 
-            char_ = character.permute(1, 0)
+            char_ = character
             loss = F.cross_entropy(pred, char_, ignore_index=PAD_IDX)
 
             optimizer.zero_grad(set_to_none=True)

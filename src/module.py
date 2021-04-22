@@ -285,6 +285,7 @@ class RNNEncoder(nn.Module):
 
         return output, h_t
 
+
 class RNNDecoder(nn.Module):
     def __init__(self, d_in, enc_out_size, hidden, dropout=.2, num_layers=1, attention=None, attn_dim=0):
         super(RNNDecoder, self).__init__()
@@ -309,8 +310,7 @@ class RNNDecoder(nn.Module):
 
 
     def forward(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
-        # TODO: Check shape here?
-        if self.attention:
+        if self.attention is not None:
             # Handles num_layers > 1 by taking last layer
             hidden_key = hidden_state[0][-1].unsqueeze(0)
             attn_W = self.attention_layer(hidden_key, enc_output, enc_ctxt_mask)
@@ -373,14 +373,13 @@ class LocationSensitiveAttention(nn.Module):
         """
         PARAMS
         ------
-        query: decoder output (batch x 1 x n_mel_channels)
+        query: decoder output (1x batch x n_mel_channels)
         processed_memory: processed encoder outputs (B, T_in, attention_dim)
         attention_weights_cat: cumulative and prev. att weights (B, 2, max_time)
         RETURNS
         -------
         alignment (batch, max_time)
         """
-
         processed_query = self.query_layer(query).permute(1, 0, 2)
         processed_attention_weights = self.location_layer(attention_weights_cat)
         energies = self.v(torch.tanh(
@@ -412,6 +411,7 @@ class LocationSensitiveAttention(nn.Module):
         self.attention_weights_cum += self.attention_weights
         ctxt = torch.bmm(self.attention_weights.unsqueeze(1), memory)
         return ctxt
+
 
 class LuongGeneralAttention(nn.Module):
     def __init__(self, hidden_size, enc_out_size, attention_dim):
