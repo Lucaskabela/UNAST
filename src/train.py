@@ -281,9 +281,9 @@ def train(args):
                 batch = batch_getter.get_supervised_batch()
                 loss += train_sp_step(losses, model, batch)
 
-            # Gradients have accumulated - lets back prop!
+            # Gradients have accumulated - lets back prop and free memory
             optimizer_step(loss, model, optimizer, args)
-
+            del loss
             # DISCRIMINATOR
             if args.use_discriminator:
                 for _ in range(0, args.d_steps):
@@ -291,8 +291,8 @@ def train(args):
                     # TODO: Train discriminator
 
         # Eval and save
-        log_loss_metrics(losses, epoch)
         per, eval_losses = evaluate(model, valid_dataloader)
+        log_loss_metrics(losses, epoch)
         log_loss_metrics(eval_losses, epoch, eval=True)
         sched.step()
         model.teacher.step()
