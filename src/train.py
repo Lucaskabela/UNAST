@@ -160,7 +160,7 @@ def optimizer_step(loss, model, optimizer, args):
         nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
     optimizer.step()
 
-def train_sp_step(losses, model, optimizer, batch, args):
+def train_sp_step(losses, model, batch):
     batch = process_batch(batch)
     asr_loss, tts_loss = supervised_step(model, batch)
     loss = tts_loss + asr_loss
