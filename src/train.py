@@ -182,7 +182,7 @@ def train_ae_step(losses, model, batch):
 
 def train_cm_step(losses, model, batch):
     batch = process_batch(batch)
-    s_cm_loss, t_cm_loss = crossmodel_step(model, batch)
+    t_cm_loss, s_cm_loss = crossmodel_step(model, batch)
     loss = s_cm_loss + t_cm_loss
 
     # Log losses
@@ -283,7 +283,7 @@ def train(args):
 
             # Gradients have accumulated - lets back prop!
             optimizer_step(loss, model, optimizer, args)
-
+            del loss
             # DISCRIMINATOR
             if args.use_discriminator:
                 for _ in range(0, args.d_steps):
@@ -291,8 +291,8 @@ def train(args):
                     # TODO: Train discriminator
 
         # Eval and save
-        log_loss_metrics(losses, epoch)
         per, eval_losses = evaluate(model, valid_dataloader)
+        log_loss_metrics(losses, epoch)
         log_loss_metrics(eval_losses, epoch, eval=True)
         sched.step()
         model.teacher.step()
