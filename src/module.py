@@ -381,7 +381,7 @@ class LocationSensitiveAttention(nn.Module):
         alignment (batch, max_time)
         """
 
-        processed_query = self.query_layer(query)
+        processed_query = self.query_layer(query).permute(1, 0, 2)
         processed_attention_weights = self.location_layer(attention_weights_cat)
         energies = self.v(torch.tanh(
             processed_query + processed_attention_weights + processed_memory))
