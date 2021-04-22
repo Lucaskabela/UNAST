@@ -100,18 +100,24 @@ def masked_mse(gold_mel, pred_mel, mel_mask):
     result = torch.sum(diff2) / torch.sum(mel_mask)
     return result
 
-# TODO: add weights for the losses in args?
-def text_loss(gold_char, text_pred):
-    return F.cross_entropy(text_pred, gold_char, ignore_index=PAD_IDX)
+def text_loss(gold_char, text_pred, eos_weight=1.0):
+    weight = torch.ones(text_pred.shape[1], device=DEVICE)
+    weight[EOS_IDX] = eos_weight
+    return F.cross_entropy(text_pred,
+                           gold_char,
+                           weight=weight,
+                           ignore_index=PAD_IDX)
 
-def speech_loss(gold_mel, stop_label, pred_mel, post_pred_mel, mel_len, stop_pred):
+def speech_loss(gold_mel, stop_label, pred_mel, post_pred_mel, mel_len, stop_pred, eos_weight=1.0):
     # Apply length mask to pred_mel!
     mel_mask = sent_lens_to_mask(mel_len, pred_mel.shape[1]).unsqueeze(-1).repeat(1, 1, pred_mel.shape[2])
     pred_loss = masked_mse(gold_mel, pred_mel, mel_mask)
     post_pred_loss = masked_mse(gold_mel, post_pred_mel, mel_mask)
-    stop_loss = F.binary_cross_entropy_with_logits(stop_pred, stop_label)
+    stop_weight = torch.where(stop_label.eq(1),
+                              torch.tensor(eos_weight).to(DEVICE),
+                              torch.ones(1, device=DEVICE))
+    stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label, pos_weight=stop_weight)
     return pred_loss + post_pred_loss + stop_loss
-
 
 def cross_entropy(input, target, size_average=True):
     """ Cross entropy that accepts soft targets
@@ -160,9 +166,8 @@ def discriminator_target(output, target_type, smoothing=0.1):
     return target
 
 
-
 #####----- Use these to run a task on a batch ----#####
-def autoencoder_step(model, batch, use_dis_loss=False):
+def autoencoder_step(model, batch, args, use_dis_loss=False):
     """
     Compute and return the loss for autoencoders
     """
@@ -181,13 +186,13 @@ def autoencoder_step(model, batch, use_dis_loss=False):
         text_pred = model.text_ae(text, text_len).permute(0, 2, 1)
         pre_pred, post_pred, stop_pred = model.speech_ae(mel, mel_len)
 
-    s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred)
-    t_ae_loss = text_loss(gold_char.to(DEVICE), text_pred)
+    s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
+    t_ae_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
     if use_dis_loss:
         return t_ae_loss, s_ae_loss, t_d_loss, s_d_loss
     return t_ae_loss, s_ae_loss
 
-def supervised_step(model, batch, use_dis_loss=False):
+def supervised_step(model, batch, args, use_dis_loss=False):
     x, y = batch
     text, mel, text_len, mel_len  = x
     gold_char, gold_mel, gold_stop = y
@@ -204,13 +209,13 @@ def supervised_step(model, batch, use_dis_loss=False):
         pre_pred, post_pred, stop_pred = model.tts(text, text_len, mel, mel_len)
         text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
 
-    tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred)
-    asr_loss = text_loss(gold_char.to(DEVICE), text_pred)
+    tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
+    asr_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
     if use_dis_loss:
         return asr_loss, tts_loss, t_d_loss, s_d_loss
     return asr_loss, tts_loss
 
-def crossmodel_step(model, batch, use_dis_loss=False):
+def crossmodel_step(model, batch, args, use_dis_loss=False):
     #NOTE: not sure if this will fail bc multiple grads on the model...
     x, y = batch
     text, mel, text_len,  mel_len  = x
@@ -222,7 +227,7 @@ def crossmodel_step(model, batch, use_dis_loss=False):
         cm_t_d_loss = discriminator_hidden_to_loss(model, cm_t_hid, 'speech', freeze_discriminator=True)
     else:
         pre_pred, post_pred, stop_pred = model.cm_speech_in(mel, mel_len)
-    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred)
+    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
 
     # Now do text!
     if use_dis_loss:
@@ -231,7 +236,7 @@ def crossmodel_step(model, batch, use_dis_loss=False):
         cm_s_d_loss = discriminator_hidden_to_loss(model, cm_s_hid, 'text', freeze_discriminator=True)
     else:
         text_pred = model.cm_text_in(text, text_len).permute(0, 2, 1)
-    t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred)
+    t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
 
     if use_dis_loss:
         return t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss
@@ -283,13 +288,13 @@ def optimizer_step(model, optimizer, args):
     optimizer.step()
     optimizer.zero_grad(set_to_none=True)
 
-def train_sp_step(losses, model, batch, accum_steps, use_discriminator):
+def train_sp_step(losses, model, batch, accum_steps, args):
     batch = process_batch(batch)
-    if use_discriminator:
-        asr_loss, tts_loss, t_d_loss, s_d_loss = supervised_step(model, batch, use_discriminator)
+    if args.use_discriminator:
+        asr_loss, tts_loss, t_d_loss, s_d_loss = supervised_step(model, batch, args, args.use_discriminator)
         loss = tts_loss + asr_loss + t_d_loss + s_d_loss
     else:
-        asr_loss, tts_loss = supervised_step(model, batch)
+        asr_loss, tts_loss = supervised_step(model, batch, args)
         loss = tts_loss + asr_loss
     loss = loss / accum_steps
 
@@ -303,13 +308,13 @@ def train_sp_step(losses, model, batch, accum_steps, use_discriminator):
         losses['s_sp_d'].append(s_d_loss.detach().cpu().item())
     return loss
 
-def train_ae_step(losses, model, batch, accum_steps, use_discriminator):
+def train_ae_step(losses, model, batch, accum_steps, args):
     batch = process_batch(batch)
-    if use_discriminator:
-        t_ae_loss, s_ae_loss, t_d_loss, s_d_loss = autoencoder_step(model, batch, use_discriminator)
+    if args.use_discriminator:
+        t_ae_loss, s_ae_loss, t_d_loss, s_d_loss = autoencoder_step(model, batch, args, args.use_discriminator)
         loss = t_ae_loss + s_ae_loss + t_d_loss + s_d_loss
     else:
-        t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
+        t_ae_loss, s_ae_loss = autoencoder_step(model, batch, args)
         loss = t_ae_loss + s_ae_loss
     loss = loss / accum_steps
     loss.backward()
@@ -322,15 +327,15 @@ def train_ae_step(losses, model, batch, accum_steps, use_discriminator):
         losses['s_ae_d'].append(s_d_loss.detach().cpu().item())
     return loss
 
-def train_cm_step(losses, model, batch, accum_steps, use_discriminator):
+def train_cm_step(losses, model, batch, accum_steps, args):
     # NOTE: do not use cross_model here bc need to take optimizer step inbetween
     batch = process_batch(batch)
 
-    if use_discriminator:
-        t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss = crossmodel_step(model, batch, use_discriminator)
+    if args.use_discriminator:
+        t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss = crossmodel_step(model, batch, args, args.use_discriminator)
         loss = s_cm_loss + t_cm_loss + cm_t_d_loss + cm_s_d_loss
     else:
-        t_cm_loss, s_cm_loss = crossmodel_step(model, batch)
+        t_cm_loss, s_cm_loss = crossmodel_step(model, batch, args)
         loss = s_cm_loss + t_cm_loss
     loss = loss / accum_steps
     loss.backward()
@@ -379,15 +384,15 @@ def evaluate(model, valid_dataloader):
             x, _ = batch
             text, mel, text_len, mel_len = x
 
-            t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
+            t_ae_loss, s_ae_loss = autoencoder_step(model, batch, args)
             losses['t_ae'].append(t_ae_loss.detach().item())
             losses['s_ae'].append(s_ae_loss.detach().item())
 
-            asr_loss, tts_loss = supervised_step(model, batch)
+            asr_loss, tts_loss = supervised_step(model, batch, args)
             losses['asr_'].append(asr_loss.detach().item())
             losses['tts_'].append(tts_loss.detach().item())
 
-            t_cm_loss, s_cm_loss = crossmodel_step(model, batch)
+            t_cm_loss, s_cm_loss = crossmodel_step(model, batch, args)
             losses['s_cm'].append(s_cm_loss.detach().item())
             losses['t_cm'].append(t_cm_loss.detach().item())
 
@@ -445,17 +450,17 @@ def train(args):
             # DENOISING AUTO ENCODER
             for _ in range(0, args.ae_steps):
                 batch = batch_getter.get_unsupervised_batch()
-                train_ae_step(losses, model, batch, accum_steps, args.use_discriminator)
+                train_ae_step(losses, model, batch, accum_steps, args)
 
             # CM TTS/ASR
             for _ in range(0, args.cm_steps):
                 batch = batch_getter.get_unsupervised_batch()
-                train_cm_step(losses, model, batch, accum_steps, args.use_discriminator)
+                train_cm_step(losses, model, batch, accum_steps, args)
 
             # SUPERVISED
             for _ in range(0, args.sp_steps):
                 batch = batch_getter.get_supervised_batch()
-                train_sp_step(losses, model, batch, accum_steps, args.use_discriminator)
+                train_sp_step(losses, model, batch, accum_steps, args)
 
             # Gradients have accumulated - lets back prop and free memory
             optimizer_step(model, optimizer, args)
