@@ -75,7 +75,7 @@ def sent_lens_to_mask(lens, max_length):
     """
     m = [[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] 
         for i in range(0, lens.shape[0])]
-    return torch.tensor(m, device=lens.device, dtype=torch.bool)
+    return torch.as_tensor(m, device=lens.device, dtype=torch.bool)
 
 def set_seed(seed):
     '''

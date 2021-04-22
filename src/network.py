@@ -235,8 +235,8 @@ class SpeechRNN(AutoEncoderNet):
         pad_mask = sent_lens_to_mask(stop_lens, len(outputs))
 
         res, res_stop = torch.stack(outputs, dim=1).squeeze(2), torch.stack(stops, dim=1).squeeze(1)
-        res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1).detach()
-        res_stop = res_stop * pad_mask.detach()
+        res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1)
+        res_stop = res_stop * pad_mask
         return res, res_stop
 
     def decode_sequence(self, target, hidden_state, enc_output, enc_ctxt_mask, teacher_ratio=1):
@@ -337,7 +337,7 @@ class TextRNN(AutoEncoderNet):
         """
         batch_size, max_out_len = target.shape[0], target.shape[1]
         outputs = []
-        input_ = torch.tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long)
+        input_ = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long)
         if self.decoder.las:
             self.decoder.attention_layer.init_memory(enc_output)
         for i in range(max_out_len):
@@ -382,7 +382,7 @@ class TextRNN(AutoEncoderNet):
         seq_lens = torch.zeros(batch_size, device=enc_output.device)
         
         # get a all SOS for first timestep
-        input_ = torch.tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long)
+        input_ = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long)
         i = 0
         keep_gen = torch.any(seq_lens.eq(0)) and i < max_len
         if self.decoder.las:
@@ -404,7 +404,7 @@ class TextRNN(AutoEncoderNet):
         if self.decoder.las:
             self.decoder.attention_layer.clear_memory()
         seq_lens[seq_lens == 0] = len(outputs)
-        pad_mask = sent_lens_to_mask(seq_lens, len(outputs)).detach()
+        pad_mask = sent_lens_to_mask(seq_lens, len(outputs))
 
         res = torch.stack(outputs, dim=1).squeeze(2)
         res = res * pad_mask

@@ -1,7 +1,7 @@
 {
     "seed": 0,
     "epochs": 100,
-    "lr": 1e-3,
+    "lr": 5e-4,
     "weight_decay": 1e-6,
     "lr_milestones": [
         70,
@@ -41,6 +41,6 @@
     "load_path": null,
     "use_discriminator": false,
     "use_gpu": true,
-    "optim_type": "adam",
+    "optim_type": "adamw",
     "model_type": "rnn"
 }
