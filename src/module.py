@@ -285,12 +285,12 @@ class RNNEncoder(nn.Module):
 
         return output, h_t
 
+
 class RNNDecoder(nn.Module):
-    def __init__(self, d_in, enc_out_size, hidden, dropout=.2, num_layers=1, attention=False, attn_dim=0, attn_type="lsa"):
+    def __init__(self, d_in, enc_out_size, hidden, dropout=.2, num_layers=1, attention=None, attn_dim=0):
         super(RNNDecoder, self).__init__()
 
         self.attention = attention
-        self.attn_type = attn_type
         if self.attention:
             self.input_size = enc_out_size + d_in
         else:
@@ -299,10 +299,10 @@ class RNNDecoder(nn.Module):
         self.rnn = nn.LSTM(self.input_size, hidden, num_layers=num_layers,
             batch_first=True, dropout=dropout)
 
-        if self.attention:
-            if attn_type == "lsa":
+        if self.attention is not None:
+            if self.attention == "lsa":
                 self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
-            elif attn_type == "luong":
+            elif self.attention == "luong":
                 self.attention_layer = LuongGeneralAttention(hidden, enc_out_size, attn_dim)
             # self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
             self.linear_projection = Linear(enc_out_size + hidden, hidden, w_init='tanh')
@@ -310,8 +310,7 @@ class RNNDecoder(nn.Module):
 
 
     def forward(self, embed_decode, hidden_state, enc_output, enc_ctxt_mask):
-        # TODO: Check shape here?
-        if self.attention:
+        if self.attention is not None:
             # Handles num_layers > 1 by taking last layer
             hidden_key = hidden_state[0][-1].unsqueeze(0)
             attn_W = self.attention_layer(hidden_key, enc_output, enc_ctxt_mask)
@@ -346,7 +345,7 @@ class LocationLayer(nn.Module):
 class LocationSensitiveAttention(nn.Module):
     def __init__(self, hidden_dim, encoder_dim, attention_dim,
                  attention_location_n_filters=32, attention_location_kernel_size=31):
-        super(Attention, self).__init__()
+        super(LocationSensitiveAttention, self).__init__()
         self.query_layer = Linear(hidden_dim, attention_dim,
                                       bias=False, w_init='tanh')
         self.memory_layer = Linear(encoder_dim, attention_dim, bias=False,
@@ -360,9 +359,9 @@ class LocationSensitiveAttention(nn.Module):
     def init_memory(self, enc_output):
         self.processed_memory = self.memory_layer(enc_output)
         self.attention_weights_cum = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
-            device=enc_ouptut.device)
+            device=enc_output.device)
         self.attention_weights = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
-            device=enc_ouptut.device)
+            device=enc_output.device)
     
     def clear_memory(self):
         self.processed_memory = None
@@ -374,15 +373,14 @@ class LocationSensitiveAttention(nn.Module):
         """
         PARAMS
         ------
-        query: decoder output (batch x 1 x n_mel_channels)
+        query: decoder output (1x batch x n_mel_channels)
         processed_memory: processed encoder outputs (B, T_in, attention_dim)
         attention_weights_cat: cumulative and prev. att weights (B, 2, max_time)
         RETURNS
         -------
         alignment (batch, max_time)
         """
-
-        processed_query = self.query_layer(query)
+        processed_query = self.query_layer(query).permute(1, 0, 2)
         processed_attention_weights = self.location_layer(attention_weights_cat)
         energies = self.v(torch.tanh(
             processed_query + processed_attention_weights + processed_memory))
@@ -400,7 +398,7 @@ class LocationSensitiveAttention(nn.Module):
         attention_weights_cat: previous and cummulative attention weights
         mask: binary mask for padded data - 1 for no padding, 0 for padding
         """
-        attention_cat = torch.cat((attention_weights.unsqueeze(1),
+        attention_cat = torch.cat((self.attention_weights.unsqueeze(1),
              self.attention_weights_cum.unsqueeze(1)), dim=1)
 
         alignment = self.get_alignment_energies(
@@ -410,9 +408,10 @@ class LocationSensitiveAttention(nn.Module):
             alignment.data.masked_fill_(mask, self.score_mask_value)
 
         self.attention_weights = F.softmax(alignment, dim=1)
-        self.attention_weights_cum += attention_weights
-        ctxt = torch.bmm(attention_weights.unsqueeze(1), memory)
+        self.attention_weights_cum += self.attention_weights
+        ctxt = torch.bmm(self.attention_weights.unsqueeze(1), memory)
         return ctxt
+
 
 class LuongGeneralAttention(nn.Module):
     def __init__(self, hidden_size, enc_out_size, attention_dim):
