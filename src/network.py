@@ -220,7 +220,7 @@ class SpeechTransformer(AutoEncoderNet):
 
         # Maybe this is a bit overkil...
         res, res_stop = outputs[:, 1:, :], stops[:, 1:, :]
-        pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1])
+        pad_mask = sent_lens_to_mask(stop_lens, res.shape[1])
         res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1)
         res_stop = res_stop * pad_mask
         return res, res_stop, stop_lens
@@ -309,7 +309,7 @@ class SpeechRNN(AutoEncoderNet):
 
         # Maybe this is a bit overkil...
         res, res_stop = outputs[:, 1:, :], stops[:, 1:]
-        pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1])
+        pad_mask = sent_lens_to_mask(stop_lens, res.shape[1])
         res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1)
         res_stop = res_stop * pad_mask
         return res, res_stop, stop_lens
@@ -429,8 +429,8 @@ class TextTransformer(AutoEncoderNet):
 
         # Maybe this is a bit overkil...
         # Cut off SOS
-        res = outputs[:, 1:, :]
-        pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1])
+        res = outputs[:, 1:]
+        pad_mask = sent_lens_to_mask(stop_lens, res.shape[1])
         res = res * pad_mask
         return res, stop_lens
 
@@ -563,8 +563,8 @@ class TextRNN(AutoEncoderNet):
         # Maybe this is a bit overkil...
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.clear_memory()
-        res = outputs[:, 1:, :]
-        pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1])
+        res = outputs[:, 1:]
+        pad_mask = sent_lens_to_mask(stop_lens, res.shape[1])
         res = res * pad_mask
         return res, stop_lens
 
