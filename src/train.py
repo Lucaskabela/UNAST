@@ -477,12 +477,13 @@ def train(args):
     total_step = s_epoch * epoch_steps
 
     for epoch in range(s_epoch, args.epochs):
-        model.train()
         losses = defaultdict(list)
 
         bar = tqdm(range(0, epoch_steps))
         bar.set_description("Epoch {}".format(epoch))
-        for _ in bar:
+        for s in bar:
+            model.train()
+
             # if args.use_discriminator:
             #     # need to freeze the disciminator first
             #     freeze_model_parameters(model.discriminator)
@@ -526,13 +527,20 @@ def train(args):
             if args.model_type == "rnn":
                 sched.step()
 
+            # Show parameters weight
+            if WRITER:
+                step = epoch*epoch_steps*max_obj_steps + (s + 1)*max_obj_steps - 1
+                sum_params = 0
+                for param in model.parameters():
+                    sum_params += torch.sum(param).abs().item()
+                WRITER.add_scalar("model_params_weight", sum_params, step)
+
             # Log train example to tensorboard
             if WRITER and (s + 1) % args.tb_example_step == 0:
                 idx = np.random.randint(0, len(supervised_train_dataset))
                 ex = supervised_train_dataset[idx]
                 step = epoch*epoch_steps*max_obj_steps + (s + 1)*max_obj_steps - 1
                 log_tb_example(model, ex, step)
-                model.train()
 
         # Eval and save
         per, eval_losses = evaluate(model, valid_dataloader)
@@ -540,12 +548,12 @@ def train(args):
         log_loss_metrics(eval_losses, epoch, eval=True)
 
         # Log eval example to tensorboard
-        step = epoch*(epoch_steps + 1)*max_obj_steps - 1
+        step = (epoch + 1)*epoch_steps*max_obj_steps - 1
         idx = np.random.randint(0, len(val_dataset))
         ex = val_dataset[idx]
         log_tb_example(model, ex, step, "eval")
         for key_, loss in eval_losses.items():
-            WRITER.add_scalar(f"eval/{key_}_loss", np.mean(loss))
+            WRITER.add_scalar(f"eval/{key_}_loss", np.mean(loss), step)
 
         model.teacher.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
@@ -724,7 +732,7 @@ if __name__ == "__main__":
 
     if args.tb_log_path:
         WRITER = SummaryWriter(log_dir=args.tb_log_path, flush_secs=60)
-        # WRITER.add_hparams(args)
+        WRITER.add_text("params", str(vars(args)), 0)
     train(args)
     if WRITER:
         WRITER.close()
