@@ -214,6 +214,9 @@ class TextPrenet(nn.Module):
         :param input_: Tensor of Phoneme IDs (text)
         """
         input_ = self.emb_dropout(self.embed(input_))
+        return self.forward_fcn(input_)
+    
+    def forward_fcn(self, input_):
         input_ = input_.transpose(1, 2)
         input_ = self.dropout1(torch.relu(self.batch_norm1(self.conv1(input_))))
         input_ = self.dropout2(torch.relu(self.batch_norm2(self.conv2(input_))))
@@ -236,15 +239,50 @@ class TextPostnet(nn.Module):
         """
         return self.fc1(self.dropout1(decode_out))
 
+# Taken from: https://pytorch.org/tutorials/beginner/transformer_tutorial.html
+class PositionalEncoding(nn.Module):
+
+    def __init__(self, d_model, dropout=0.1, max_len=5000):
+        # d_model is model dimension
+        super(PositionalEncoding, self).__init__()
+        self.dropout = nn.Dropout(p=dropout)
+
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        pe = pe.unsqueeze(0)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x):
+        x = x + self.pe[:x.size(0), :]
+        return self.dropout(x)
+
 class TransformerEncoder(nn.Module):
-    # TODO: Fill in from TTS repo :)
-    def __init__(self):
+    def __init__(self, ninp, nhead, nhid, dropout, nlayers):
         super(TransformerEncoder, self).__init__()
+        encoder_layers = torch.nn.TransformerEncoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_encoder = torch.nn.TransformerEncoder(encoder_layers, nlayers)
+
+    def forward(self, src, src_mask, src_pad_mask):
+        # src will be (N, S, E) -> needs to be (S, N, E) for transformer!
+        src = src.transpose(0, 1)
+        memory_out = self.transformer_encoder(src, src_mask, src_pad_mask)
+        return memory_out.transpose(0, 1)
 
 class TransformerDecoder(nn.Module):
-    # TODO: Fill in from TTS repo :)
-    def __init__(self):
+    def __init__(self, ninp, nhead, nhid, dropout, nlayers):
         super(TransformerDecoder, self).__init__()
+        decoder_layer = TransformerDecoderLayer(ninp, nhead, nhid, dropout)
+        self.transformer_decoder = TransformerDecoder(decoder_layer, nlayers)
+
+    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None, tgt_key_padding_mask=None, memory_key_padding_mask=None):
+        tgt = tgt.transpose(0, 1)
+        memory = memory.transpose(0, 1)
+        out = self.transformer_decoder(tgt, memory, tgt_mask, memory_mask, tgt_key_padding_mask, memory_key_padding_mask)
+        return out.transpose(0, 1)
+
 
 class RNNEncoder(nn.Module):
     # TODO: Write this

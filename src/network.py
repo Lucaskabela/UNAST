@@ -16,7 +16,7 @@ class AutoEncoderNet(nn.Module):
         super(AutoEncoderNet, self).__init__()
     
     # TODO: Need more input for padded sequences?
-    def preprocess(self, raw_input_tensor):
+    def preprocess(self, input_, input_lens):
         '''
         Preprocesses raw input using the prenet, returning input for the encoder
 
@@ -34,7 +34,7 @@ class AutoEncoderNet(nn.Module):
         '''
         raise Exception("Please use a subclass for text or speech")
 
-    def encode(self, raw_input_tensor):
+    def encode(self, input_, input_lens, noise_in=False):
         '''
         Encodes raw input using the prenet & encoder, returning latent vector & 
         necessary components for attention
@@ -94,45 +94,44 @@ class UNAST(nn.Module):
         self.discriminator = discriminator
         self.teacher = teacher
 
-    def text_ae(self, character_input):
-        return self.text_m.forward(character_input, noise_in=True, teacher_ratio=self.teacher.get_val())
+    def text_ae(self, text, text_len):
+        return self.text_m.forward(text, text_len, noise_in=True, teacher_ratio=self.teacher.get_val())
     
-    def speech_ae(self, mel):
-        return self.speech_m.forward(mel, noise_in=True, teacher_ratio=self.teacher.get_val())
+    def speech_ae(self, mel, mel_len):
+        return self.speech_m.forward(mel, mel_len, noise_in=True, teacher_ratio=self.teacher.get_val())
 
-    def cm_text_in(self, character_input):
-        t_e_o, t_hid, t_pad_mask = self.text_m.encode(character_input)
-        pred, _ = self.speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
-        cm_s_e_o, cm_s_hid, cm_s_pad_mask = self.speech_m.encode(pred)
-        text_pred = self.text_m.decode_sequence(character_input, cm_s_hid, cm_s_e_o, 
-            cm_s_pad_mask, teacher_ratio=self.teacher.get_val())
+    def cm_text_in(self, text, text_len):
+        t_e_o, t_mask = self.text_m.encode(text, text_len)
+        pred, _, pred_lens = self.speech_m.infer_sequence(t_e_o, t_mask)
+        cm_s_e_o, cm_mask = self.speech_m.encode(pred, pred_lens)
+        text_pred = self.text_m.decode_sequence(text, text_len, cm_s_e_o, cm_mask,
+            teacher_ratio=self.teacher.get_val())
         return text_pred
 
-    def cm_speech_in(self, mel):
-        s_e_o, s_hid, s_pad_mask = self.speech_m.encode(mel)
-        text_pred = self.text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
-        cm_t_e_o, cm_t_hid, cm_t_pad_mask = self.text_m.encode(text_pred)
-        pred, stop_pred = self.speech_m.decode_sequence(mel, cm_t_hid, cm_t_e_o, 
-            cm_t_pad_mask, teacher_ratio=self.teacher.get_val())
+    def cm_speech_in(self, mel, mel_len):
+        s_e_o, s_mask = self.speech_m.encode(mel, mel_len)
+        text_pred, text_pred_len = self.text_m.infer_sequence(s_e_o, s_mask)
+        cm_t_e_o, cm_t_masks = self.text_m.encode(text_pred, text_pred_len)
+        pred, stop_pred = self.speech_m.decode_sequence(mel, mel_len, cm_t_e_o, 
+            cm_t_masks, teacher_ratio=self.teacher.get_val())
         return pred, stop_pred
     
-    def tts(self, character, mel, infer=False):
-        t_e_o, t_hid, t_pad_mask = self.text_m.encode(character)
+    def tts(self, text, text_len, mel, mel_len, infer=False):
+        t_e_o, t_masks = self.text_m.encode(text, text_len)
         if not infer:
-            pred, stop_pred = self.speech_m.decode_sequence(mel, t_hid, t_e_o, 
-                t_pad_mask, teacher_ratio=self.teacher.get_val())
+            pred, stop_pred = self.speech_m.decode_sequence(mel, mel_len, t_e_o, 
+                t_masks, teacher_ratio=self.teacher.get_val())
         else:
-            pred, stop_pred = self.speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
+            pred, stop_pred, _ = self.speech_m.infer_sequence(t_e_o, t_masks)
         return pred, stop_pred
 
-    def asr(self, character, mel, infer=False):
-        s_e_o, s_hid, s_pad_mask = self.speech_m.encode(mel)
+    def asr(self, text, text_len, mel, mel_len, infer=False):
+        s_e_o, s_masks = self.speech_m.encode(mel)
         if not infer:
-            text_pred = self.text_m.decode_sequence(character, s_hid, s_e_o, 
-                s_pad_mask, teacher_ratio=self.teacher.get_val())
+            return self.text_m.decode_sequence(text, text_len, s_e_o, 
+                s_masks, teacher_ratio=self.teacher.get_val())
         else:
-            text_pred = self.text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
-        return text_pred
+            return self.text_m.infer_sequence(s_e_o, s_masks)
 
     def num_params(self):
         pytorch_total_params = 0
@@ -157,10 +156,95 @@ class Discriminator(nn.Module):
         return self.fc3(temp2)
     
 class SpeechTransformer(AutoEncoderNet):
-    # TODO: Fill in with pre/post needed and enc/dec
+
     def __init__(self, args):
         super(SpeechTransformer, self).__init__()
+        self.prenet = SpeechPrenet(args.num_mels, args.s_pre_hid, args.e_in, p=args.s_pre_drop)
+        self.pos_emb = PositionalEncoding( args.e_in)
+        self.encoder = TransformerEncoder( args.e_in, args.nhead, args.hidden, args.e_drop, args.num_layers)
+        self.decoder = TransformerDecoder( args.e_in, args.nhead, args.hidden, args.d_drop, args.num_layers)
+        self.postnet = SpeechPostnet(args.num_mels, args.hidden, p=args.s_post_drop)
 
+    def generate_square_subsequent_mask(sz):
+        mask = (torch.triu(torch.ones((sz, sz), device=DEVICE)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def create_mask(x, x_lens, enc=True):
+        max_seq_len = x.shape[1]
+        if enc:
+            x_mask = torch.zeros((max_seq_len, max_seq_len), device=DEVICE, dtype=torch.bool)
+        else:
+            x_mask = generate_square_subsequent_mask(max_seq_len)
+
+        pad_mask = sent_lens_to_mask(x_lens, max_seq_len)
+        return x_mask, pad_mask
+
+    def preprocess(self, input_, input_lens, enc=True):
+        input_mask, input_pad_mask = create_mask(input_, input_lens, enc=True)
+        pre_in =  self.prenet(input_)
+        return self.pos_emb(pre_in) (input_mask, input_pad_mask)
+
+    def encode(self, input_, input_lens, noise_in=False):
+        if noise_in:
+            input_ = noise_fn(input_)
+        embedded_input, (input_mask, input_pad_mask) = self.preprocess(input_, input_lens)
+        enc_outputs = self.encoder(embedded_input, input_mask, input_pad_mask)
+        return enc_outputs, (input_mask, input_pad_mask)
+
+    def decode(self, tgt, tgt_lens, enc_outputs, enc_mask):
+        embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt, tgt_lens, enc=False)
+        return self.postnet.mel_and_stop(self.decoder(embedded_tgt, enc_outputs, tgt_mask, None, tgt_pad_mask, enc_mask))
+
+    def postprocess(self, decoded_latent):
+        return self.postnet(dec_output)
+
+    def infer_sequence(self, memory, masks, max_len=815):
+        input_mask, input_pad_mask = masks
+        batch_size = enc_output.shape[0]
+        outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
+        stop_lens = torch.zeros(batch_size, device=memory.device).fill(max_len)
+        stops = torch.zeros((batch_size, 1), device=memory.device)
+        i = 0
+        keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
+        while keep_gen:
+            (dec_out, stop_pred) = self.decode(outputs, stop_lens, memory, input_pad_mask)
+            stops = torch.cat([stops, stop_pred], dim=1)
+            outputs = torch.cat([outputs, dec_out], dim=1)
+
+            # set stop_lens here!
+            stop_mask = (torch.sigmoid(stop_pred.squeeze()) >= .5).logical_and(stop_lens == max_len)
+            stop_lens[stop_mask] = i
+            i +=1
+            keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
+
+        # Maybe this is a bit overkil...
+        res, res_stop = outputs[:, 1:, :], stops[:, 1:, :]
+        pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1])
+        res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1)
+        res_stop = res_stop * pad_mask
+        return res, res_stop, stop_lens
+
+    def decode_sequence(self, tgt, tgt_lens, enc_outputs, masks, teacher_ratio=1):
+        # No use for teacher ratio here...
+
+        input_mask, input_pad_mask = masks
+
+        # Need to adjust tgt with "go" padding:
+        sos = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
+        tgt_input = torch.cat([sos, tgt[:, :-1, :]], dim=1)
+
+        embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt_input, tgt_lens, enc=False)
+        outs = self.decoder(embedded_tgt, enc_outputs, tgt_mask, None,
+                                        tgt_pad_mask, input_pad_mask)
+
+        (dec_out, stop_pred)  = self.postnet.mel_and_stop(outs)
+        return dec_out + self.postprocess(dec_out), stop_pred
+
+    def forward(self, mel, mel_len, noise_in=False, teacher_ratio=1):
+        enc_outputs, masks = self.encode(mel, mel_len, noise_in)
+        return self.decode_sequence(mel, mel_len, enc_outputs, masks)
+        
 
 class SpeechRNN(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
@@ -174,15 +258,12 @@ class SpeechRNN(AutoEncoderNet):
         self.postnet = SpeechPostnet(args.num_mels, args.hidden, p=args.s_post_drop)
     
 
-    def preprocess(self, raw_input_tensor):
-        # raw_input_tensor should be a LongTensor of size [batch_size x seq_len x 1]
-        # should already be padded as well
-        # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
-        # NOTE: I do not think this is correct for mel... but check if all are padding in num_mels
-        pad_mask = torch.all(raw_input_tensor.eq(PAD_IDX), dim=-1)
-        return self.prenet(raw_input_tensor), pad_mask
+    def preprocess(self, mel, mel_lens):
+        max_seq_len = mel.shape[1]
+        pad_mask = sent_lens_to_mask(mel_len, max_seq_len)
+        return self.prenet(mel), pad_mask
 
-    def encode(self, raw_input_tensor, noise_in=False):
+    def encode(self, mel, mel_lens, noise_in=False):
         """
         Returns:
             - output: a tensor of shape [batch_size x seq_len x latent_dim], which
@@ -193,79 +274,72 @@ class SpeechRNN(AutoEncoderNet):
             - pad_mask: a tensor of shape [batch_size x seq_len] with 1s for padded 
                 indices and 0 for everything else
         """
-        mel_features, pad_mask = self.preprocess(raw_input_tensor)
         if noise_in:
             mel_features = noise_fn(mel_features)
+        mel_features, pad_mask = self.preprocess(mel, mel_lens)
         enc_output, hidden_state = self.encoder(mel_features)
-        return enc_output, hidden_state, pad_mask
+        return (hidden_state, enc_output), pad_mask
 
-    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=815):
+    def infer_sequence(self, enc_outputs, enc_ctxt_mask, max_len=815):
+
+        hidden_state, enc_output = enc_outputs
 
         batch_size = enc_output.shape[0]
-        outputs = []
-        stops = []
+        outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
+        stops = torch.zeros((batch_size, 1), device=memory.device)
         stop_lens = torch.zeros(batch_size, device=enc_output.device)
         
         # get a all 0 frame for first timestep
-        input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
         i = 0
         keep_gen = torch.any(stop_lens.eq(0)) and i < max_len
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.init_memory(enc_output)
-
         while keep_gen:
-            (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
-            stop_pred = stop_pred.squeeze()
-            stops.append(stop_pred)
-            # set stop_lens here!
-            outputs.append(dec_out)
-            input_ = outputs[-1]
-            i += 1
+            (dec_out, stop_pred), hidden_state = self.decode(outputs[:, -1, :], hidden_state, enc_output, enc_ctxt_mask)
+            stops = torch.cat([stops, stop_pred], dim=1)
+            outputs = torch.cat([outputs, dec_out], dim=1)
 
             # double check this!
-            stop_mask = (torch.sigmoid(stop_pred) >= .5).logical_and(stop_lens == 0)
+            stop_mask = (torch.sigmoid(stop_pred.squeeze()) >= .5).logical_and(stop_lens == 0)
             stop_lens[stop_mask] = i
-            keep_gen = torch.any(stop_lens.eq(0)) and i < max_len
-
+            i += 1
+            keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.clear_memory()
 
         # Maybe this is a bit overkil...
-        stop_lens[stop_lens == 0] = len(outputs)
-        pad_mask = sent_lens_to_mask(stop_lens, len(outputs))
-
-        res, res_stop = torch.stack(outputs, dim=1).squeeze(2), torch.stack(stops, dim=1).squeeze(1)
+        res, res_stop = outputs[:, 1:, :], stops[:, 1:, :]
+        pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1])
         res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1)
         res_stop = res_stop * pad_mask
-        return res, res_stop
+        return res, res_stop, stop_lens
 
-    def decode_sequence(self, target, hidden_state, enc_output, enc_ctxt_mask, teacher_ratio=1):
+    def decode_sequence(self, target, target_len, enc_outputs, enc_ctxt_mask, teacher_ratio=1):
         """
         For easier training!  target is teacher forcing [batch_size x seq_len x num_mels]
         """
+        hidden_state, enc_output = enc_outputs
         batch_size, max_out_len = target.shape[0], target.shape[1]
-        outputs = []
-        stops = []
+        outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
+        input_ = outputs[:, -1, :]
+        stops = torch.zeros((batch_size, 1), device=memory.device)
         # get a all 0 frame for first timestep
-        input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.init_memory(enc_output)
         for i in range(max_out_len):
             (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
-            outputs.append(dec_out)
-            stops.append(stop_pred)
+            stops = torch.cat([stops, stop_pred], dim=1)
+            outputs = torch.cat([outputs, dec_out], dim=1)
 
             if random.random() < teacher_ratio:
                 input_ = target[:, i, :].unsqueeze(1)
             else:
-                input_ = outputs[-1]
-
+                input_ = outputs[:, -1, :]
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.clear_memory()
 
-        decoder_outputs = torch.stack(outputs, dim=1).squeeze()
-        res = decoder_outputs + self.postprocess(decoder_outputs)
-        return res, torch.stack(stops, dim=1).squeeze()
+        res = outputs + self.postprocess(outputs)
+        return res, stops
 
     def decode(self, input_, hidden_state, enc_output, enc_ctxt_mask):
         """
@@ -285,16 +359,97 @@ class SpeechRNN(AutoEncoderNet):
     def postprocess(self, dec_output, distrib=False):
         return self.postnet(dec_output)
 
-    def forward(self, mel, noise_in=False, teacher_ratio=1):
-        encoder_outputs, latent_hidden, pad_mask = self.encode(mel, noise_in=noise_in)
-        pred, stop_pred = self.decode_sequence(mel, latent_hidden, encoder_outputs, pad_mask, teacher_ratio)
+    def forward(self, mel, mel_len, noise_in=False, teacher_ratio=1):
+        encoder_outputs, pad_mask = self.encode(mel, mel_len, noise_in=noise_in)
+        pred, stop_pred = self.decode_sequence(mel, mel_len, encoder_outputs, pad_mask, teacher_ratio)
         return pred, stop_pred
         
 class TextTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
     def __init__(self, args):
         super(TextTransformer, self).__init__()
+        self.prenet = TextPrenet(args.t_emb_dim, args.e_in, p=args.t_pre_drop)
+        self.pos_emb = PositionalEncoding( args.e_in)
+        self.encoder = TransformerEncoder( args.e_in, args.nhead, args.hidden, args.e_drop, args.num_layers)
+        self.decoder = TransformerDecoder( args.e_in, args.nhead, args.hidden, args.d_drop, args.num_layers)
+        self.postnet = TextPostnet(args.hidden, args.t_post_drop)
 
+    def generate_square_subsequent_mask(sz):
+        mask = (torch.triu(torch.ones((sz, sz), device=DEVICE)) == 1).transpose(0, 1)
+        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+        return mask
+
+    def create_mask(x, x_lens, enc=True):
+        max_seq_len = x.shape[1]
+        if enc:
+            x_mask = torch.zeros((max_seq_len, max_seq_len), device=DEVICE, dtype=torch.bool)
+        else:
+            x_mask = generate_square_subsequent_mask(max_seq_len)
+
+        pad_mask = sent_lens_to_mask(x_lens, max_seq_len)
+        return x_mask, pad_mask
+
+    def preprocess(self, input_, input_lens, enc=True):
+        input_mask, input_pad_mask = create_mask(input_, input_lens, enc=True)
+        pre_in =  self.prenet(input_)
+        return self.pos_emb(pre_in) (input_mask, input_pad_mask)
+
+    def encode(self, input_, input_lens, noise_in=False):
+        if noise_in:
+            input_ = noise_fn(input_)
+        embedded_input, (input_mask, input_pad_mask) = self.preprocess(input_, input_lens)
+        enc_outputs = self.encoder(embedded_input, input_mask, input_pad_mask)
+        return enc_outputs, (input_mask, input_pad_mask)
+
+    def decode(self, tgt, tgt_lens, enc_outputs, enc_mask):
+        embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt, tgt_lens, enc=False)
+        return self.postprocess(self.decoder(embedded_tgt, enc_outputs, tgt_mask, None, tgt_pad_mask, enc_mask))
+
+    def postprocess(self, decoded_latent):
+        return self.postnet(dec_output)
+
+    def infer_sequence(self, memory, masks, max_len=815):
+        input_mask, input_pad_mask = masks
+        batch_size = memory.shape[0]
+        outputs = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=memory.device, dtype=torch.long).unsqueeze(1)
+        stop_lens = torch.zeros(batch_size, device=memory.device).fill(max_len)
+
+        i = 0
+        keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
+        while keep_gen:
+            dec_out = self.decode(outputs, stop_lens, memory, input_pad_mask)
+            choice = torch.argmax(dec_out, dim=-1)
+            outputs = torch.cat([outputs, choice], dim=1)
+
+            # set stop_lens here!
+            stop_mask = (choice.squeeze() == EOS_IDX).logical_and(stop_lens == max_len)
+            stop_lens[stop_mask] = i
+            i +=1
+            keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
+
+        # Maybe this is a bit overkil...
+        # Cut off SOS
+        res = outputs[:, 1:, :]
+        pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1])
+        res = res * pad_mask
+        return res, stop_lens
+
+    def decode_sequence(self, tgt, tgt_lens, enc_outputs, masks, teacher_ratio=1):
+        input_mask, input_pad_mask = masks
+        # Need to adjust tgt with "go" padding:
+        sos = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=memory.device, dtype=torch.long).unsqueeze(1)
+        tgt_input = torch.cat([sos, tgt[:, :-1, :]], dim=1)
+
+        embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt_input, tgt_lens, enc=False)
+        outs = self.decoder(embedded_tgt, enc_outputs, tgt_mask, None,
+                                        tgt_pad_mask, input_pad_mask)
+
+        return self.postprocess(dec_out)
+
+    def forward(self, text, text_len, noise_in=False, teacher_ratio=1):
+        enc_outputs, (input_mask, input_pad_mask) = self.encode(mel, mel_len, noise_in)
+        return self.decode_sequence(text, text_len, enc_outputs, input_mask, input_pad_mask)
+        
 
 class TextRNN(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
@@ -307,14 +462,17 @@ class TextRNN(AutoEncoderNet):
             num_layers=args.num_layers, attention=args.d_attn, attn_dim=args.attn_dim)
         self.postnet = TextPostnet(args.hidden, args.t_post_drop)
 
-    def preprocess(self, raw_input_tensor):
+    def preprocess(self, text, text_lens, noise_in=False):
         # raw_input_tensor should be a LongTensor of size [batch_size x seq_len x 1]
         # should already be padded as well
         # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
-        pad_mask = raw_input_tensor.eq(PAD_IDX) 
-        return self.prenet(raw_input_tensor), pad_mask
+        pad_mask = text.eq(PAD_IDX) 
+        embedded_phonemes = self.prenet.emb_dropout(self.prenet.embed(text))
+        if noise_in:
+            embedded_phonemes = noise_fn(embedded_phonemes)
+        return self.prenet.forward_fcn(embedded_phonemes), pad_mask
 
-    def encode(self, raw_input_tensor, noise_in=False):
+    def encode(self, text, text_lens, noise_in=False):
         """
         Returns:
             - output: a tensor of shape [batch_size x seq_len x latent_dim], which
@@ -325,16 +483,15 @@ class TextRNN(AutoEncoderNet):
             - pad_mask: a tensor of shape [batch_size x seq_len] with 1s for padded 
                 indices and 0 for everything else
         """
-        embedded_phonemes, pad_mask = self.preprocess(raw_input_tensor)
-        if noise_in:
-            embedded_phonemes = noise_fn(embedded_phonemes)
+        embedded_phonemes, pad_mask = self.preprocess(text, text_lens, noise_in)
         enc_output, hidden_state = self.encoder(embedded_phonemes)
-        return enc_output, hidden_state, pad_mask
+        return (hidden_state, enc_output), pad_mask
 
-    def decode_sequence(self, target, hidden_state, enc_output, enc_ctxt_mask, teacher_ratio=1):
+    def decode_sequence(self, target, enc_outputs, enc_ctxt_mask, teacher_ratio=1):
         """
         For easier training!  target is teacher forcing [batch_size x seq_len]
         """
+        hidden_state, enc_output = enc_outputs
         batch_size, max_out_len = target.shape[0], target.shape[1]
         out_list = []
         input_ = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long).unsqueeze(1)
@@ -377,43 +534,41 @@ class TextRNN(AutoEncoderNet):
         else:
             return final_out
 
-    def infer_sequence(self, hidden_state, enc_output, enc_ctxt_mask, max_len=300):
+    def infer_sequence(self, enc_outputs, enc_ctxt_mask, max_len=300):
 
+        hidden_state, enc_output = enc_outputs
         batch_size = enc_output.shape[0]
-        out_list = []
-        seq_lens = torch.zeros(batch_size, device=enc_output.device)
+        outputs = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=memory.device, dtype=torch.long).unsqueeze(1)
+        stop_lens = torch.zeros(batch_size, device=memory.device).fill(max_len)
         
         # get a all SOS for first timestep
         input_ = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long).unsqueeze(1)
         i = 0
-        keep_gen = torch.any(seq_lens.eq(0)) and i < max_len
+        keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.init_memory(enc_output)
         while keep_gen:
-            dec_out, hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
-            out_list.append(torch.argmax(dec_out, dim=-1))
-            outputs = torch.cat(out_list, dim=1)
+            dec_out, hidden_state = self.decode(outputs, hidden_state, enc_output, enc_ctxt_mask)
+            choice = torch.argmax(dec_out, dim=-1)
+            outputs = torch.cat([outputs, choice], dim=1)
             # set stop_lens here!
-            out_list = [outputs]
-            input_ = outputs
-            i += 1
 
             # double check this!
-            stop_mask = (torch.argmax(dec_out, dim=-1).squeeze() == EOS_IDX).logical_and(seq_lens == 0)
-            seq_lens[stop_mask] = i
-            keep_gen = torch.any(seq_lens.eq(0)) and i < max_len
+            stop_mask = (choice.squeeze() == EOS_IDX).logical_and(stop_lens == max_len)
+            stop_lens[stop_mask] = i
+            i += 1
+
+            keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
 
         # Maybe this is a bit overkil...
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.clear_memory()
-        seq_lens[seq_lens == 0] = outputs.shape[1]
-        pad_mask = sent_lens_to_mask(seq_lens, outputs.shape[1])
-
-        res = outputs
+        res = outputs[:, 1:, :]
+        pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1])
         res = res * pad_mask
-        return res
+        return res, stop_lens
 
-    def forward(self, input_, noise_in=False, teacher_ratio=1):
-        encoder_outputs, latent_hidden, pad_mask = self.encode(input_, noise_in=noise_in)
-        pred = self.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask, teacher_ratio)
+    def forward(self, text, text_len, noise_in=False, teacher_ratio=1):
+        encoder_outputs, pad_mask = self.encode(text, text_len, noise_in=noise_in)
+        pred = self.decode_sequence(text, text_len, encoder_outputs, pad_mask, teacher_ratio)
         return pred

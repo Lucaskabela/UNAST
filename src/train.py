@@ -72,20 +72,20 @@ class BatchGetter():
 
 def process_batch(batch):
     # Pos_text is unused so don't even bother loading it up
-    character, mel, text_len, mel_len = batch
+    text, mel, text_len, mel_len = batch
 
     # Detach gold labels stuff we use a lot to device
-    gold_mel, gold_char = mel.detach(), character.detach()
+    gold_mel, gold_char = mel.detach(), text.detach()
     # stop label should be 1 for length, subtracting 1 for 0 based indexing
     with torch.no_grad():
         gold_stop = F.one_hot(mel_len - 1, mel.shape[1]).float().detach()
 
     # Send stuff we use alot to device this is character, mel, mel_input, and pos_mel
-    character, mel, = character.to(DEVICE), mel.to(DEVICE)
+    text, mel, = text.to(DEVICE), mel.to(DEVICE)
     text_len, mel_len = text_len.to(DEVICE), mel_len.to(DEVICE)
 
 
-    return (character, mel, text_len, mel_len), (gold_char, gold_mel, gold_stop)
+    return (text, mel, text_len, mel_len), (gold_char, gold_mel, gold_stop)
 
 
 #####----- LOSS FUNCTIONS -----#####
@@ -110,11 +110,11 @@ def autoencoder_step(model, batch):
     Compute and return the loss for autoencoders
     """
     x, y = batch
-    character, mel, _, mel_len  = x
+    text, mel, text_len, mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
-    text_pred = model.text_ae(character).permute(0, 2, 1)
-    pred, stop_pred = model.speech_ae(mel)
+    text_pred = model.text_ae(text, text_len).permute(0, 2, 1)
+    pred, stop_pred = model.speech_ae(mel, mel_len)
 
     # Wait to move these to device until here because memory concerns!
     s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred,  mel_len, stop_pred)
@@ -123,12 +123,12 @@ def autoencoder_step(model, batch):
 
 def supervised_step(model, batch):
     x, y = batch
-    character, mel, _, mel_len  = x
+    text, mel, text_len, mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
-    pred, stop_pred = model.tts(character, mel)
+    pred, stop_pred = model.tts(text, text_len, mel, mel_len)
     mel_aug = specaugment(mel, mel_len)
-    text_pred = model.asr(character, mel_aug).permute(0, 2, 1)
+    text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
 
     tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len, stop_pred)
     asr_loss = text_loss(gold_char.to(DEVICE), text_pred)
@@ -137,15 +137,15 @@ def supervised_step(model, batch):
 def crossmodel_step(model, batch):
     #NOTE: not sure if this will fail bc multiple grads on the model...
     x, y = batch
-    character, mel, _,  mel_len  = x
+    text, mel, text_len,  mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
     # Do speech!
-    pred, stop_pred = model.cm_speech_in(mel)
+    pred, stop_pred = model.cm_speech_in(mel, mel_len)
     s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len, stop_pred)
 
     # Now do text!
-    text_pred = model.cm_text_in(character).permute(0, 2, 1)
+    text_pred = model.cm_text_in(text, text_len).permute(0, 2, 1)
     t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred)
     return t_cm_loss, s_cm_loss
 
@@ -206,7 +206,7 @@ def evaluate(model, valid_dataloader):
         for batch in valid_dataloader:
             batch = process_batch(batch)
             x, _ = batch
-            character, mel, text_len, _ = x
+            text, mel, text_len, mel_len = x
 
             t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
             losses['t_ae'].append(t_ae_loss.detach().item())
@@ -220,14 +220,12 @@ def evaluate(model, valid_dataloader):
             losses['s_cm'].append(s_cm_loss.detach().item())
             losses['t_cm'].append(t_cm_loss.detach().item())
 
-            text_pred = model.asr(None, mel, infer=True).squeeze()
-            len_mask_max, len_mask_idx = torch.max((text_pred == PAD_IDX), dim=1)
-            len_mask_idx[len_mask_max == 0] = text_pred.shape[1]
-            per += compute_per(character, text_pred, text_len, len_mask_idx)
+            text_pred, text_pred_len = model.asr(None, None, mel, mel_len, infer=True)
+            per += compute_per(text, text_pred.squeeze(), text_len, text_pred_len)
             n_iters += 1
 
     # TODO: evaluate speech inference somehow?
-    compare_outputs(character[-1][:], text_pred[-1][:], text_len[-1], len_mask_idx[-1])
+    compare_outputs(text[-1][:], text_pred[-1][:], text_len[-1], text_pred_len[-1])
     return per/n_iters, losses
 
 def train(args):
