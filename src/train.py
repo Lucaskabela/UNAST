@@ -97,7 +97,7 @@ def speech_loss(gold_mel, stop_label, pred_mel, mel_len, stop_pred):
     # Apply length mask to pred_mel!
     pred_mel = pred_mel * sent_lens_to_mask(mel_len, pred_mel.shape[1]).unsqueeze(-1)
     pred_loss = F.mse_loss(pred_mel, gold_mel)
-    stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
+    stop_loss = F.binary_cross_entropy_with_logits(stop_pred, stop_label)
     return pred_loss + stop_loss
 
 def discriminator_loss(output, target):

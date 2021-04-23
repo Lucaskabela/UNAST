@@ -209,7 +209,7 @@ class SpeechTransformer(AutoEncoderNet):
         keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
         while keep_gen:
             (dec_out, stop_pred) = self.decode(outputs, stop_lens, memory, input_pad_mask)
-            stops = torch.cat([stops, stop_pred], dim=1)
+            stops = torch.cat([stops, stop_pred.squeeze(2)], dim=1)
             outputs = torch.cat([outputs, dec_out], dim=1)
 
             # set stop_lens here!
@@ -239,7 +239,7 @@ class SpeechTransformer(AutoEncoderNet):
                                         tgt_pad_mask, input_pad_mask)
 
         (dec_out, stop_pred)  = self.postnet.mel_and_stop(outs)
-        return dec_out + self.postprocess(dec_out), stop_pred
+        return dec_out + self.postprocess(dec_out), stop_pred.squeeze(2)
 
     def forward(self, mel, mel_len, noise_in=False, teacher_ratio=1):
         enc_outputs, masks = self.encode(mel, mel_len, noise_in)
@@ -296,7 +296,7 @@ class SpeechRNN(AutoEncoderNet):
             self.decoder.attention_layer.init_memory(enc_output)
         while keep_gen:
             (dec_out, stop_pred), hidden_state = self.decode(outputs[:, -1, :].unsqueeze(1), hidden_state, enc_output, enc_ctxt_mask)
-            stops = torch.cat([stops, stop_pred], dim=1)
+            stops = torch.cat([stops, stop_pred.squeeze(2)], dim=1)
             outputs = torch.cat([outputs, dec_out], dim=1)
 
             # double check this!
@@ -308,7 +308,7 @@ class SpeechRNN(AutoEncoderNet):
             self.decoder.attention_layer.clear_memory()
 
         # Maybe this is a bit overkil...
-        res, res_stop = outputs[:, 1:, :], stops[:, 1:, :]
+        res, res_stop = outputs[:, 1:, :], stops[:, 1:]
         pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1])
         res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1)
         res_stop = res_stop * pad_mask
@@ -328,7 +328,7 @@ class SpeechRNN(AutoEncoderNet):
             self.decoder.attention_layer.init_memory(enc_output)
         for i in range(max_out_len):
             (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
-            stops = torch.cat([stops, stop_pred], dim=1)
+            stops = torch.cat([stops, stop_pred.squeeze(2)], dim=1)
             outputs = torch.cat([outputs, dec_out], dim=1)
 
             if random.random() < teacher_ratio:
@@ -339,7 +339,7 @@ class SpeechRNN(AutoEncoderNet):
             self.decoder.attention_layer.clear_memory()
 
         res = outputs + self.postprocess(outputs)
-        return res, stops
+        return res[:, 1:, :], stops[:, 1:]
 
     def decode(self, input_, hidden_state, enc_output, enc_ctxt_mask):
         """
