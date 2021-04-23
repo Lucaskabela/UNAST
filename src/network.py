@@ -203,7 +203,7 @@ class SpeechTransformer(AutoEncoderNet):
         input_mask, input_pad_mask = masks
         batch_size = enc_output.shape[0]
         outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
-        stop_lens = torch.full((batch_size), max_len, device=memory.device)
+        stop_lens = torch.full(tuple(batch_size), max_len, device=memory.device)
         stops = torch.zeros((batch_size, 1), device=memory.device)
         i = 0
         keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
@@ -287,7 +287,7 @@ class SpeechRNN(AutoEncoderNet):
         batch_size = enc_output.shape[0]
         outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
         stops = torch.zeros((batch_size, 1), device=enc_output.device)
-        stop_lens = torch.full((batch_size), max_len, device=enc_output.device)
+        stop_lens = torch.full(tuple(batch_size), max_len, device=enc_output.device)
         
         # get a all 0 frame for first timestep
         i = 0
@@ -412,7 +412,7 @@ class TextTransformer(AutoEncoderNet):
         input_mask, input_pad_mask = masks
         batch_size = memory.shape[0]
         outputs = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=memory.device, dtype=torch.long).unsqueeze(1)
-        stop_lens = torch.full((batch_size), max_len,  device=memory.device)
+        stop_lens = torch.full(tuple(batch_size), max_len,  device=memory.device)
 
         i = 0
         keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
@@ -539,7 +539,7 @@ class TextRNN(AutoEncoderNet):
         hidden_state, enc_output = enc_outputs
         batch_size = enc_output.shape[0]
         outputs = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long).unsqueeze(1)
-        stop_lens = torch.full((batch_size), max_len, device=enc_output.device)
+        stop_lens = torch.full(tuple(batch_size), max_len, device=enc_output.device)
         
         # get a all SOS for first timestep
         input_ = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long).unsqueeze(1)
