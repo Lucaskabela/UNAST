@@ -163,8 +163,7 @@ class SpeechPostnet(nn.Module):
         return input_
 
     def mel_and_stop(self, decoder_out):
-            return self.linear_project(decoder_out), self.stop_linear(decoder_out)
-
+        return self.linear_project(decoder_out), self.stop_linear(decoder_out)
 
 
 class TextPrenet(nn.Module):
@@ -401,12 +400,12 @@ class LocationSensitiveAttention(nn.Module):
             device=enc_output.device)
         self.attention_weights = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
             device=enc_output.device)
-    
+
     def clear_memory(self):
         self.processed_memory = None
         self.attention_weights_cum = None
         self.attention_weight = None
-    
+
     def get_alignment_energies(self, query, processed_memory,
                                attention_weights_cat):
         """

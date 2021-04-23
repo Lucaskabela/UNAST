@@ -10,6 +10,7 @@ from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
 from network import TextRNN, SpeechRNN, TextTransformer, SpeechTransformer, UNAST, Discriminator
 from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
 import audio_parameters as ap
 import argparse
 import torch.nn.functional as F
@@ -20,7 +21,7 @@ from collections import defaultdict
 from data import sequence_to_text
 import math
 
-# DEVICE is only global variable
+# DEVICE, WRITER are the only global variable
 def adjust_learning_rate(optimizer, e_in, step_num, warmup_step=4000):
     lr = e_in**-0.5 * min(step_num * warmup_step**-1.5, step_num**-0.5)
     for param_group in optimizer.param_groups:
@@ -288,7 +289,7 @@ def optimizer_step(model, optimizer, args):
     optimizer.step()
     optimizer.zero_grad(set_to_none=True)
 
-def train_sp_step(losses, model, batch, accum_steps, args):
+def train_sp_step(losses, model, batch, step, accum_steps, args):
     batch = process_batch(batch)
     if args.use_discriminator:
         asr_loss, tts_loss, t_d_loss, s_d_loss = supervised_step(model, batch, args, args.use_discriminator)
@@ -303,12 +304,21 @@ def train_sp_step(losses, model, batch, accum_steps, args):
     # Log losses
     losses['asr_'].append(asr_loss.detach().cpu().item())
     losses['tts_'].append(tts_loss.detach().cpu().item())
-    if use_discriminator:
+    if args.use_discriminator:
         losses['t_sp_d'].append(t_d_loss.detach().cpu().item())
         losses['s_sp_d'].append(s_d_loss.detach().cpu().item())
+
+    # Log to tensorboard
+    if WRITER:
+        WRITER.add_scalar('train/sp_asr_loss', asr_loss.detach().cpu().item(), step)
+        WRITER.add_scalar('train/sp_tts_loss', tts_loss.detach().cpu().item(), step)
+        if args.use_discriminator:
+            WRITER.add_scalar('train/sp_t_dis_loss', t_d_loss.detach().cpu().item(), step)
+            WRITER.add_scalar('train/sp_s_dis_loss', s_d_loss.detach().cpu().item(), step)
+
     return loss
 
-def train_ae_step(losses, model, batch, accum_steps, args):
+def train_ae_step(losses, model, batch, step, accum_steps, args):
     batch = process_batch(batch)
     if args.use_discriminator:
         t_ae_loss, s_ae_loss, t_d_loss, s_d_loss = autoencoder_step(model, batch, args, args.use_discriminator)
@@ -322,12 +332,21 @@ def train_ae_step(losses, model, batch, accum_steps, args):
     # Log losses
     losses['t_ae'].append(t_ae_loss.detach().cpu().item())
     losses['s_ae'].append(s_ae_loss.detach().cpu().item())
-    if use_discriminator:
+    if args.use_discriminator:
         losses['t_ae_d'].append(t_d_loss.detach().cpu().item())
         losses['s_ae_d'].append(s_d_loss.detach().cpu().item())
+
+    # Log to tensorboard
+    if WRITER:
+        WRITER.add_scalar('train/ae_t_loss', t_ae_loss.detach().cpu().item(), step)
+        WRITER.add_scalar('train/ae_s_loss', s_ae_loss.detach().cpu().item(), step)
+        if args.use_discriminator:
+            WRITER.add_scalar('train/ae_t_dis_loss', t_d_loss.detach().cpu().item(), step)
+            WRITER.add_scalar('train/ae_s_dis_loss', s_d_loss.detach().cpu().item(), step)
+
     return loss
 
-def train_cm_step(losses, model, batch, accum_steps, args):
+def train_cm_step(losses, model, batch, step, accum_steps, args):
     # NOTE: do not use cross_model here bc need to take optimizer step inbetween
     batch = process_batch(batch)
 
@@ -346,16 +365,32 @@ def train_cm_step(losses, model, batch, accum_steps, args):
     if args.use_discriminator:
         losses['cm_s_cm_d'].append(cm_s_d_loss.detach().cpu().item())
         losses['cm_t_cm_d'].append(cm_t_d_loss.detach().cpu().item())
+
+    # Log to tensorboard
+    if WRITER:
+        WRITER.add_scalar('train/cm_t_loss', t_cm_loss.detach().cpu().item(), step)
+        WRITER.add_scalar('train/cm_s_loss', s_cm_loss.detach().cpu().item(), step)
+        if args.use_discriminator:
+            WRITER.add_scalar('train/cm_t_dis_loss', cm_t_d_loss.detach().cpu().item(), step)
+            WRITER.add_scalar('train/cm_s_dis_loss', cm_s_d_loss.detach().cpu().item(), step)
+
     return loss
 
-def train_discriminator_step(losses, model, batch, accum_steps):
+def train_discriminator_step(losses, model, batch, step, accum_steps):
     t_d_loss, s_d_loss = discriminator_step(model, batch)
 
     loss = (t_d_loss + s_d_loss) / accum_steps
     loss.backward()
 
+    # Log losses
     losses['t_d'].append(t_d_loss.detach().cpu().item())
     losses['s_d'].append(s_d_loss.detach().cpu().item())
+
+    # Log to tensorboard
+    if WRITER:
+        WRITER.add_scalar('train/dis_text_loss', t_d_loss.detach().cpu().item(), step)
+        WRITER.add_scalar('train/dis_speech_loss', s_d_loss.detach().cpu().item(), step)
+
     return loss
 
 def freeze_model_parameters(model):
@@ -384,15 +419,18 @@ def evaluate(model, valid_dataloader):
             x, _ = batch
             text, mel, text_len, mel_len = x
 
-            t_ae_loss, s_ae_loss = autoencoder_step(model, batch, args)
+            t_ae_loss, s_ae_pred_loss, s_ae_stop_loss = autoencoder_step(model, batch, args)
+            s_ae_loss = s_ae_pred_loss + s_ae_stop_loss
             losses['t_ae'].append(t_ae_loss.detach().item())
             losses['s_ae'].append(s_ae_loss.detach().item())
 
-            asr_loss, tts_loss = supervised_step(model, batch, args)
+            asr_loss, tts_pred_loss, tts_stop_loss = supervised_step(model, batch, args)
+            tts_loss = tts_pred_loss + tts_stop_loss
             losses['asr_'].append(asr_loss.detach().item())
             losses['tts_'].append(tts_loss.detach().item())
 
-            t_cm_loss, s_cm_loss = crossmodel_step(model, batch, args)
+            t_cm_loss, s_cm_pred_loss, s_cm_stop_loss = crossmodel_step(model, batch, args)
+            s_cm_loss = s_cm_pred_loss + s_cm_stop_loss
             losses['s_cm'].append(s_cm_loss.detach().item())
             losses['t_cm'].append(t_cm_loss.detach().item())
 
@@ -422,6 +460,10 @@ def train(args):
     per, eval_losses = evaluate(model, valid_dataloader)
     log_loss_metrics(eval_losses, -1, eval=True)
 
+    max_obj_steps = max(args.ae_steps, args.cm_steps, args.sp_steps)
+    if args.use_discriminator:
+        max_obj_steps = max(max_obj_steps, args.d_steps)
+
     accum_steps = args.ae_steps + args.cm_steps + args.sp_steps
     # one step is doing all 4 training tasks
     if args.epoch_steps >= 0:
@@ -448,22 +490,26 @@ def train(args):
             #     unfreeze_model_parameters(model.speech_m)
 
             # DENOISING AUTO ENCODER
-            for _ in range(0, args.ae_steps):
+            for si in range(0, args.ae_steps):
                 batch = batch_getter.get_unsupervised_batch()
-                train_ae_step(losses, model, batch, accum_steps, args)
+                step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
+                train_ae_step(losses, model, batch, step, accum_steps, args)
 
             # CM TTS/ASR
-            for _ in range(0, args.cm_steps):
+            for si in range(0, args.cm_steps):
                 batch = batch_getter.get_unsupervised_batch()
-                train_cm_step(losses, model, batch, accum_steps, args)
+                step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
+                train_cm_step(losses, model, batch, step, accum_steps, args)
 
             # SUPERVISED
-            for _ in range(0, args.sp_steps):
+            for si in range(0, args.sp_steps):
                 batch = batch_getter.get_supervised_batch()
-                train_sp_step(losses, model, batch, accum_steps, args)
+                step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
+                train_sp_step(losses, model, batch, step, accum_steps, args)
 
             # Gradients have accumulated - lets back prop and free memory
             optimizer_step(model, optimizer, args)
+
             # DISCRIMINATOR
             if args.use_discriminator:
                 # unfreeze_model_parameters(model.discriminator)
@@ -471,19 +517,36 @@ def train(args):
                 # freeze_model_parameters(model.speech_m)
                 for _ in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
-                    train_discriminator_step(losses, model, batch, args.d_steps)
+                    step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
+                    train_discriminator_step(losses, model, batch, step, args.d_steps)
                 optimizer_step(model, optimizer, args)
-
 
             if args.model_type == "transformer":
                 adjust_learning_rate(optimizer, args.e_in, total_step + 1)
-        if args.model_type == "rnn":
-            sched.step()
+            if args.model_type == "rnn":
+                sched.step()
+
+            # Log train example to tensorboard
+            if WRITER and (s + 1) % args.tb_example_step == 0:
+                idx = np.random.randint(0, len(supervised_train_dataset))
+                ex = supervised_train_dataset[idx]
+                step = epoch*epoch_steps*max_obj_steps + (s + 1)*max_obj_steps - 1
+                log_tb_example(model, ex, step)
+                model.train()
 
         # Eval and save
         per, eval_losses = evaluate(model, valid_dataloader)
         log_loss_metrics(losses, epoch)
         log_loss_metrics(eval_losses, epoch, eval=True)
+
+        # Log eval example to tensorboard
+        step = epoch*(epoch_steps + 1)*max_obj_steps - 1
+        idx = np.random.randint(0, len(val_dataset))
+        ex = val_dataset[idx]
+        log_tb_example(model, ex, step, "eval")
+        for key_, loss in eval_losses.items():
+            WRITER.add_scalar(f"eval/{key_}_loss", np.mean(loss))
+
         model.teacher.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
         save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
@@ -492,6 +555,21 @@ def train(args):
             best = per
     model.eval()
     return model
+
+
+def log_tb_example(model, ex, step, name="train"):
+    model.eval()
+    if WRITER:
+        ex_mel = torch.tensor(ex["mel"]).unsqueeze(0)
+        ex_text = torch.LongTensor(ex["text"]).unsqueeze(0)
+        text_pred = model.asr(None, ex_mel.to(DEVICE), infer=True).squeeze(dim=0).detach().cpu().numpy()
+        speech_pred, speech_stop_pred = model.tts(ex_text.to(DEVICE), None, infer=True)
+        speech_pred = speech_pred.squeeze(dim=0).detach().cpu().numpy()
+        WRITER.add_text(f"{name}/text_gold", sequence_to_text(ex["text"]), step)
+        WRITER.add_text(f"{name}/text_pred", sequence_to_text(text_pred), step)
+        WRITER.add_image(f"{name}/speech_gold", np.flip(ex["mel"].transpose(), axis=0), step, dataformats="HW")
+        WRITER.add_image(f"{name}/speech_pred", np.flip(speech_pred.transpose(), axis=0), step, dataformats="HW")
+
 
 def log_loss_metrics(losses, epoch, eval=False):
     kind = "Train"
@@ -641,6 +719,12 @@ if __name__ == "__main__":
     args = parse_with_config(parser)
 
     global DEVICE
+    global WRITER
     DEVICE = init_device(args)
 
+    if args.tb_log_path:
+        WRITER = SummaryWriter(log_dir=args.tb_log_path, flush_secs=60)
+        # WRITER.add_hparams(args)
     train(args)
+    if WRITER:
+        WRITER.close()

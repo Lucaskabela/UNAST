@@ -321,7 +321,7 @@ class SpeechRNN(AutoEncoderNet):
             (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             stops = torch.cat([stops, stop_pred.squeeze(2)], dim=1)
             outputs = torch.cat([outputs, dec_out], dim=1)
-            stop_pred = stop_pred.squeeze()
+            stop_pred = stop_pred.flatten(start_dim=0)
             # set stop_lens here!
             i += 1
 
