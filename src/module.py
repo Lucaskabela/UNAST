@@ -286,15 +286,15 @@ class RNNEncoder(nn.Module):
         return output, h_t
 
 class RNNDecoder(nn.Module):
-    def __init__(self, enc_out_size, hidden, dropout=.2, num_layers=1, attention=False, attn_dim=0, las=False):
+    def __init__(self, d_in, enc_out_size, hidden, dropout=.2, num_layers=1, attention=False, attn_dim=0, las=False):
         super(RNNDecoder, self).__init__()
 
         self.attention = attention
         self.las = las
         if self.attention:
-            self.input_size = enc_out_size + hidden
+            self.input_size = enc_out_size + d_in
         else:
-            self.input_size = hidden
+            self.input_size = d_in
 
         self.rnn = nn.LSTM(self.input_size, hidden, num_layers=num_layers,
             batch_first=True, dropout=dropout)
@@ -305,7 +305,7 @@ class RNNDecoder(nn.Module):
             else:
                 self.attention_layer = LuongGeneralAttention(hidden, enc_out_size, attn_dim)
             # self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
-            self.linear_projection = Linear(self.input_size, hidden, w_init='tanh')
+            self.linear_projection = Linear(enc_out_size + hidden, hidden, w_init='tanh')
             self.dropout1 = nn.Dropout(p=dropout)
 
 
@@ -363,7 +363,12 @@ class LocationSensitiveAttention(nn.Module):
             device=enc_ouptut.device)
         self.attention_weights = torch.zeros((enc_output.shape[0], enc_output.shape[1]),
             device=enc_ouptut.device)
-
+    
+    def clear_memory(self):
+        self.processed_memory = None
+        self.attention_weights_cum = None
+        self.attention_weight = None
+    
     def get_alignment_energies(self, query, processed_memory,
                                attention_weights_cat):
         """

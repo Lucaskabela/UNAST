@@ -86,24 +86,26 @@ class AutoEncoderNet(nn.Module):
 
 
 class UNAST(nn.Module):
-    def __init__(self, text_m, speech_m, discriminator=None):
+    def __init__(self, text_m, speech_m, discriminator=None, teacher=None):
         """NOTE: text_m and speech_m should be same type (RNN or Transformer)"""
         super(UNAST, self).__init__()
         self.text_m = text_m
         self.speech_m = speech_m
         self.discriminator = discriminator
+        self.teacher = teacher
 
     def text_ae(self, character_input, ret_enc_hid=False):
-        return self.text_m.forward(character_input, noise_in=True, ret_enc_hid=ret_enc_hid)
+        return self.text_m.forward(character_input, noise_in=True, teacher_ratio=self.teacher.get_val(), ret_enc_hid=ret_enc_hid)
 
     def speech_ae(self, mel, ret_enc_hid=False):
-        return self.speech_m.forward(mel, noise_in=True, ret_enc_hid=ret_enc_hid)
+        return self.speech_m.forward(mel, noise_in=True, ret_enc_hid=ret_enc_hid, teacher_ratio=self.teacher.get_val())
 
     def cm_text_in(self, character_input, ret_enc_hid=False):
         t_e_o, t_hid, t_pad_mask = self.text_m.encode(character_input)
         pred, _ = self.speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
         cm_s_e_o, cm_s_hid, cm_s_pad_mask = self.speech_m.encode(pred)
-        text_pred = self.text_m.decode_sequence(character_input, cm_s_hid, cm_s_e_o, cm_s_pad_mask)
+        text_pred = self.text_m.decode_sequence(character_input, cm_s_hid, cm_s_e_o, 
+            cm_s_pad_mask, teacher_ratio=self.teacher.get_val())
         if ret_enc_hid:
             return text_pred, t_hid, cm_s_hid
         return text_pred
@@ -112,7 +114,8 @@ class UNAST(nn.Module):
         s_e_o, s_hid, s_pad_mask = self.speech_m.encode(mel)
         text_pred = self.text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
         cm_t_e_o, cm_t_hid, cm_t_pad_mask = self.text_m.encode(text_pred)
-        pred, stop_pred = self.speech_m.decode_sequence(mel, cm_t_hid, cm_t_e_o, cm_t_pad_mask)
+        pred, stop_pred = self.speech_m.decode_sequence(mel, cm_t_hid, cm_t_e_o, 
+            cm_t_pad_mask, teacher_ratio=self.teacher.get_val())
         if ret_enc_hid:
             return pred, stop_pred, s_hid, cm_t_hid
         return pred, stop_pred
@@ -120,7 +123,8 @@ class UNAST(nn.Module):
     def tts(self, character, mel, infer=False, ret_enc_hid=False):
         t_e_o, t_hid, t_pad_mask = self.text_m.encode(character)
         if not infer:
-            pred, stop_pred = self.speech_m.decode_sequence(mel, t_hid, t_e_o, t_pad_mask)
+            pred, stop_pred = self.speech_m.decode_sequence(mel, t_hid, t_e_o, 
+                t_pad_mask, teacher_ratio=self.teacher.get_val())
         else:
             pred, stop_pred = self.speech_m.infer_sequence(t_hid, t_e_o, t_pad_mask)
         if ret_enc_hid:
@@ -130,7 +134,8 @@ class UNAST(nn.Module):
     def asr(self, character, mel, infer=False, ret_enc_hid=False):
         s_e_o, s_hid, s_pad_mask = self.speech_m.encode(mel)
         if not infer:
-            text_pred = self.text_m.decode_sequence(character, s_hid, s_e_o, s_pad_mask)
+            text_pred = self.text_m.decode_sequence(character, s_hid, s_e_o, 
+                s_pad_mask, teacher_ratio=self.teacher.get_val())
         else:
             text_pred = self.text_m.infer_sequence(s_hid, s_e_o, s_pad_mask)
         if ret_enc_hid:
@@ -175,7 +180,7 @@ class SpeechRNN(AutoEncoderNet):
         self.prenet = SpeechPrenet(args.num_mels, args.s_pre_hid, args.e_in, p=args.s_pre_drop)
         self.encoder = RNNEncoder(args.e_in, args.hidden, dropout=args.e_drop,
             num_layers=args.num_layers, bidirectional=args.e_bi)
-        self.decoder = RNNDecoder(args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop,
+        self.decoder = RNNDecoder(args.e_in, args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop, 
             num_layers=args.num_layers, attention=args.d_attn, attn_dim=args.attn_dim)
         self.postnet = SpeechPostnet(args.num_mels, args.hidden, p=args.s_post_drop)
 
@@ -185,7 +190,7 @@ class SpeechRNN(AutoEncoderNet):
         # should already be padded as well
         # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
         # NOTE: I do not think this is correct for mel... but check if all are padding in num_mels
-        pad_mask = torch.all(raw_input_tensor.eq(PAD_IDX), dim=-1).squeeze()
+        pad_mask = torch.all(raw_input_tensor.eq(PAD_IDX), dim=-1)
         return self.prenet(raw_input_tensor), pad_mask
 
     def encode(self, raw_input_tensor, noise_in=False):
@@ -233,6 +238,9 @@ class SpeechRNN(AutoEncoderNet):
             stop_lens[stop_mask] = i
             keep_gen = torch.any(stop_lens.eq(0)) and i < max_len
 
+        if self.decoder.las:
+            self.decoder.attention_layer.clear_memory()
+
         # Maybe this is a bit overkil...
         stop_lens[stop_lens == 0] = len(outputs)
         pad_mask = sent_lens_to_mask(stop_lens, len(outputs))
@@ -263,6 +271,9 @@ class SpeechRNN(AutoEncoderNet):
             else:
                 input_ = outputs[-1]
 
+        if self.decoder.las:
+            self.decoder.attention_layer.clear_memory()
+
         decoder_outputs = torch.stack(outputs, dim=1).squeeze()
         res = decoder_outputs + self.postprocess(decoder_outputs)
         return res, torch.stack(stops, dim=1).squeeze()
@@ -285,9 +296,9 @@ class SpeechRNN(AutoEncoderNet):
     def postprocess(self, dec_output, distrib=False):
         return self.postnet(dec_output)
 
-    def forward(self, mel, noise_in=False, ret_enc_hid=False):
+    def forward(self, mel, noise_in=False, ret_enc_hid=False, teacher_ratio=1):
         encoder_outputs, latent_hidden, pad_mask = self.encode(mel, noise_in=noise_in)
-        pred, stop_pred = self.decode_sequence(mel, latent_hidden, encoder_outputs, pad_mask)
+        pred, stop_pred = self.decode_sequence(mel, latent_hidden, encoder_outputs, pad_mask, teacher_ratio)
         if ret_enc_hid:
             return pred, stop_pred, latent_hidden
         return pred, stop_pred
@@ -305,7 +316,7 @@ class TextRNN(AutoEncoderNet):
         self.prenet = TextPrenet(args.t_emb_dim, args.e_in, p=args.t_pre_drop)
         self.encoder = RNNEncoder(args.e_in, args.hidden, dropout=args.e_drop,
             num_layers=args.num_layers, bidirectional=args.e_bi)
-        self.decoder = RNNDecoder(args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop,
+        self.decoder = RNNDecoder(args.t_emb_dim, args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop, 
             num_layers=args.num_layers, attention=args.d_attn, attn_dim=args.attn_dim)
         self.postnet = TextPostnet(args.hidden, args.t_post_drop)
 
@@ -313,7 +324,7 @@ class TextRNN(AutoEncoderNet):
         # raw_input_tensor should be a LongTensor of size [batch_size x seq_len x 1]
         # should already be padded as well
         # Get a mask of 0 for no padding, 1 for padding of size [batch_size x seq_len]
-        pad_mask = raw_input_tensor.eq(PAD_IDX).squeeze()
+        pad_mask = raw_input_tensor.eq(PAD_IDX) 
         return self.prenet(raw_input_tensor), pad_mask
 
     def encode(self, raw_input_tensor, noise_in=False):
@@ -349,6 +360,8 @@ class TextRNN(AutoEncoderNet):
                 input_ = target[:, i]
             else:
                 input_ = torch.argmax(dec_out, dim=-1).squeeze()
+        if self.decoder.las:
+            self.decoder.attention_layer.clear_memory()
         return torch.stack(outputs, dim=1).squeeze(2)
 
     def decode(self, input_, hidden_state, enc_output, enc_ctxt_mask):
@@ -401,6 +414,8 @@ class TextRNN(AutoEncoderNet):
             keep_gen = torch.any(seq_lens.eq(0)) and i < max_len
 
         # Maybe this is a bit overkil...
+        if self.decoder.las:
+            self.decoder.attention_layer.clear_memory()
         seq_lens[seq_lens == 0] = len(outputs)
         pad_mask = sent_lens_to_mask(seq_lens, len(outputs)).detach()
 
@@ -408,9 +423,9 @@ class TextRNN(AutoEncoderNet):
         res = res * pad_mask
         return res
 
-    def forward(self, input_, noise_in=False, ret_enc_hid = False):
+    def forward(self, input_, noise_in=False, teacher_ratio=1, ret_enc_hid = False):
         encoder_outputs, latent_hidden, pad_mask = self.encode(input_, noise_in=noise_in)
-        pred = self.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask)
+        pred = self.decode_sequence(input_, latent_hidden, encoder_outputs, pad_mask, teacher_ratio)
         if ret_enc_hid:
             return pred, latent_hidden
         return pred

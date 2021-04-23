@@ -20,7 +20,7 @@ from collections import defaultdict
 from data import sequence_to_text
 import math
 
-# DEVICE is only global variable
+# DEVICE, TEACHER is only global variable
 
 class BatchGetter():
     def __init__(self, args, supervised_dataset, unsupervised_dataset, full_dataset):
@@ -176,16 +176,17 @@ def supervised_step(model, batch, use_dis_loss=False):
     character, mel, _, mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
+    mel_aug = specaugment(mel, mel_len)
     if use_dis_loss:
         pred, stop_pred, t_hid = model.tts(character, mel, ret_enc_hid=use_dis_loss)
         t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech')
 
-        text_pred, s_hid = model.asr(character, mel, ret_enc_hid=use_dis_loss)
+        text_pred, s_hid = model.asr(character, mel_aug, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(1, 2, 0)
         s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text')
     else:
         pred, stop_pred = model.tts(character, mel)
-        text_pred = model.asr(character, mel).permute(1, 2, 0)
+        text_pred = model.asr(character, mel_aug).permute(1, 2, 0)
 
     tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len.to(DEVICE), stop_pred)
     asr_loss = text_loss(gold_char.to(DEVICE), text_pred)
@@ -389,17 +390,19 @@ def train(args):
             batch_size=args.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
             num_workers=args.num_workers)
+    batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
+
     s_epoch, best, model, optimizer = initialize_model(args)
+    milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
+    sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
+
     print("Training model with {} parameters".format(model.num_params()))
     per, eval_losses = evaluate(model, valid_dataloader)
     log_loss_metrics(eval_losses, -1, eval=True)
-    milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
-    sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
+
     for epoch in range(s_epoch, args.epochs):
         model.train()
         losses = defaultdict(list)
-
-        batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
 
         # one step is doing all 4 training tasks
         if args.epoch_steps >= 0:
@@ -440,6 +443,7 @@ def train(args):
         per, eval_losses = evaluate(model, valid_dataloader)
         log_loss_metrics(eval_losses, epoch, eval=True)
         sched.step()
+        model.teacher.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
         save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
         if per < best:
@@ -554,7 +558,7 @@ def initialize_model(args):
     """
         Using args, initialize starting epoch, best per, model, optimizer
     """
-    text_m, speech_m, discriminator = None, None, None
+    text_m, speech_m, discriminator, teacher = None, None, None, get_teacher_ratio(args)
     if args.model_type == 'rnn':
         text_m = TextRNN(args).to(DEVICE)
         speech_m = SpeechRNN(args).to(DEVICE)
@@ -577,6 +581,7 @@ def initialize_model(args):
         s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
         s_epoch = s_epoch + 1
 
+    model.teacher.iter = s_epoch
     return s_epoch, best, model, optimizer
 
 def initialize_datasets(args):

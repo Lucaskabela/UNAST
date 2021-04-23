@@ -46,6 +46,28 @@ def noise_fn(to_noise, mask_p=.3, swap_p=0):
     zero_mask = torch.bernoulli(gen).unsqueeze(-1)
     return to_noise * zero_mask
 
+def specaugment(mel, mel_len, freq_mask=20, time_mask=100, replace_with_zero=False):
+    # No timewarp because I don't hate myself that much
+    with torch.no_grad():
+        res = mel.detach().clone()
+        freq_len = torch.randint(0, freq_mask, mel_len.shape)
+        time_len = torch.randint(0, time_mask, mel_len.shape)
+
+        for i in range(freq_len.shape[0]):
+            mean_ = res[i].mean()
+            f = freq_len[i].item()
+            t = time_len[i].item()
+
+            f_zero = random.randrange(0, mel_len[i]- f)
+            t_zero = random.randrange(0, mel_len[i]- t)
+            if replace_with_zero:
+                res[i][:][f_zero:f_zero+f] = 0
+                res[i][t_zero:t_zero+t][:] = 0
+            else:
+                res[i][:][f_zero:f_zero+f] = mean_
+                res[i][t_zero:t_zero+t][:] = mean_
+
+    return res
 
 def sent_lens_to_mask(lens, max_length):
     """
@@ -86,6 +108,27 @@ def init_logger(log_dir=None):
         valid_logger = tb.SummaryWriter(path.join(log_dir, "valid"))
     return train_logger, valid_logger
 
+class TeacherRatio():
+    def __init__(self, args):
+        self.iter = 0
+        self.val = args.teacher_init_val
+        self.gamma = args.teacher_gamma
+        self.start_step = args.teacher_decay_start
+        self.stop_step = args.teacher_decay_end
+    
+    def step(self):
+        self.iter += 1
+
+    def get_val(self):
+        # Do not change val in case user loads w/iter
+        if self.start_step <= self.iter:
+            power = min(self.iter, self.stop_step) - self.start_step
+            return self.val * (self.gamma ** power)
+        else:
+            return self.val
+            
+def get_teacher_ratio(args):
+    return TeacherRatio(args)
 
 # Next two methods courtesy of: https://towardsdatascience.com/how-to-save-and-load-a-model-in-pytorch-with-a-complete-example-c2920e617dee
 def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):

@@ -8,6 +8,10 @@
         90
     ],
     "lr_gamma": 1e-2,
+    "teacher_init_val": 1,
+    "teacher_gamma": 0.98,
+    "teacher_decay_start": 10,
+    "teacher_decay_end": 70,
     "grad_clip": 1.0,
     "batch_size": 64,
     "epoch_steps": 50,
