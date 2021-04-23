@@ -177,7 +177,8 @@ class SpeechTransformer(AutoEncoderNet):
         else:
             x_mask = generate_square_subsequent_mask(max_seq_len)
 
-        pad_mask = sent_lens_to_mask(x_lens, max_seq_len)
+        pad_mask = torch.logical_not(sent_lens_to_mask(x_lens, max_seq_len))
+        print(pad_mask)
         return x_mask, pad_mask
 
     def preprocess(self, input_, input_lens, enc=True):
@@ -219,11 +220,9 @@ class SpeechTransformer(AutoEncoderNet):
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
 
         # Maybe this is a bit overkil...
-        res, res_stop = outputs[:, 1:, :], stops[:, 1:, :]
+        res, res_stop = (outputs + self.postprocess(outputs))[:, 1:, :], stop_pred[:, 1:]
         pad_mask = sent_lens_to_mask(stop_lens, res.shape[1])
-        res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1)
-        res_stop = res_stop * pad_mask
-        return res, res_stop, stop_lens
+        return res * pad_mask.unsqueeze(-1), res_stop * pad_mask, stop_lens
 
     def decode_sequence(self, tgt, tgt_lens, enc_outputs, masks, teacher_ratio=1):
         # No use for teacher ratio here...
@@ -260,7 +259,7 @@ class SpeechRNN(AutoEncoderNet):
 
     def preprocess(self, mel, mel_lens):
         max_seq_len = mel.shape[1]
-        pad_mask = sent_lens_to_mask(mel_lens, max_seq_len)
+        pad_mask = torch.logical_not(sent_lens_to_mask(mel_lens, max_seq_len))
         return self.prenet(mel), pad_mask
 
     def encode(self, mel, mel_lens, noise_in=False):
@@ -308,11 +307,10 @@ class SpeechRNN(AutoEncoderNet):
             self.decoder.attention_layer.clear_memory()
 
         # Maybe this is a bit overkil...
-        res, res_stop = outputs[:, 1:, :], stops[:, 1:]
+        res, res_stop = (outputs + self.postprocess(outputs))[:, 1:, :], stop_pred[:, 1:]
         pad_mask = sent_lens_to_mask(stop_lens, res.shape[1])
-        res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1)
-        res_stop = res_stop * pad_mask
-        return res, res_stop, stop_lens
+        return res * pad_mask.unsqueeze(-1), res_stop * pad_mask, stop_lens
+
 
     def decode_sequence(self, target, target_len, enc_outputs, enc_ctxt_mask, teacher_ratio=1):
         """
@@ -386,7 +384,7 @@ class TextTransformer(AutoEncoderNet):
         else:
             x_mask = generate_square_subsequent_mask(max_seq_len)
 
-        pad_mask = sent_lens_to_mask(x_lens, max_seq_len)
+        pad_mask = torch.logical_not(sent_lens_to_mask(x_lens, max_seq_len))
         return x_mask, pad_mask
 
     def preprocess(self, input_, input_lens, enc=True):
