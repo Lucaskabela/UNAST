@@ -282,34 +282,42 @@ class SpeechRNN(AutoEncoderNet):
     def infer_sequence(self, enc_outputs, enc_ctxt_mask, max_len=815):
 
         hidden_state, enc_output = enc_outputs
-
         batch_size = enc_output.shape[0]
-        outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
-        stops = torch.zeros((batch_size, 1), device=enc_output.device)
+        outputs = []
+        stops = []
         stop_lens = torch.full((batch_size,), max_len, device=enc_output.device)
         
         # get a all 0 frame for first timestep
+        input_ = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
         i = 0
         keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.init_memory(enc_output)
+
         while keep_gen:
-            (dec_out, stop_pred), hidden_state = self.decode(outputs[:, -1, :].detach().unsqueeze(1), hidden_state, enc_output, enc_ctxt_mask)
-            stops = torch.cat([stops, stop_pred.squeeze(2)], dim=1)
-            outputs = torch.cat([outputs, dec_out], dim=1)
+            (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
+            stop_pred = stop_pred.squeeze()
+            stops.append(stop_pred)
+            # set stop_lens here!
+            outputs.append(dec_out)
+            input_ = outputs[-1]
+            i += 1
 
             # double check this!
-            stop_mask = (torch.sigmoid(stop_pred.squeeze()) >= .5).logical_and(stop_lens == max_len)
+            stop_mask = (torch.sigmoid(stop_pred) >= .5).logical_and(stop_lens == max_len)
             stop_lens[stop_mask] = i
-            i += 1
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
+
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.clear_memory()
 
         # Maybe this is a bit overkil...
-        res, res_stop = (outputs + self.postprocess(outputs))[:, 1:, :], stops[:, 1:]
-        pad_mask = sent_lens_to_mask(stop_lens, res.shape[1])
-        return res * pad_mask.unsqueeze(-1), res_stop * pad_mask, stop_lens
+        pad_mask = sent_lens_to_mask(stop_lens, len(outputs))
+
+        res, res_stop = torch.stack(outputs, dim=1).squeeze(2), torch.stack(stops, dim=1).squeeze(1)
+        res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1)
+        res_stop = res_stop * pad_mask
+        return res, res_stop
 
 
     def decode_sequence(self, target, target_len, enc_outputs, enc_ctxt_mask, teacher_ratio=1):
