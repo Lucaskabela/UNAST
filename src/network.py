@@ -231,7 +231,7 @@ class SpeechTransformer(AutoEncoderNet):
         input_mask, input_pad_mask = masks
 
         # Need to adjust tgt with "go" padding:
-        sos = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
+        sos = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_outputs.device)
         tgt_input = torch.cat([sos, tgt[:, :-1, :]], dim=1)
 
         embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt_input, tgt_lens, enc=False)
@@ -260,7 +260,7 @@ class SpeechRNN(AutoEncoderNet):
 
     def preprocess(self, mel, mel_lens):
         max_seq_len = mel.shape[1]
-        pad_mask = sent_lens_to_mask(mel_len, max_seq_len)
+        pad_mask = sent_lens_to_mask(mel_lens, max_seq_len)
         return self.prenet(mel), pad_mask
 
     def encode(self, mel, mel_lens, noise_in=False):
@@ -275,7 +275,7 @@ class SpeechRNN(AutoEncoderNet):
                 indices and 0 for everything else
         """
         if noise_in:
-            mel_features = noise_fn(mel_features)
+            mel = noise_fn(mel)
         mel_features, pad_mask = self.preprocess(mel, mel_lens)
         enc_output, hidden_state = self.encoder(mel_features)
         return (hidden_state, enc_output), pad_mask
@@ -285,8 +285,8 @@ class SpeechRNN(AutoEncoderNet):
         hidden_state, enc_output = enc_outputs
 
         batch_size = enc_output.shape[0]
-        outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
-        stops = torch.zeros((batch_size, 1), device=memory.device)
+        outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
+        stops = torch.zeros((batch_size, 1), device=enc_output.device)
         stop_lens = torch.zeros(batch_size, device=enc_output.device)
         
         # get a all 0 frame for first timestep
@@ -320,9 +320,9 @@ class SpeechRNN(AutoEncoderNet):
         """
         hidden_state, enc_output = enc_outputs
         batch_size, max_out_len = target.shape[0], target.shape[1]
-        outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
+        outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
         input_ = outputs[:, -1, :]
-        stops = torch.zeros((batch_size, 1), device=memory.device)
+        stops = torch.zeros((batch_size, 1), device=enc_output.device)
         # get a all 0 frame for first timestep
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.init_memory(enc_output)
@@ -437,7 +437,7 @@ class TextTransformer(AutoEncoderNet):
     def decode_sequence(self, tgt, tgt_lens, enc_outputs, masks, teacher_ratio=1):
         input_mask, input_pad_mask = masks
         # Need to adjust tgt with "go" padding:
-        sos = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=memory.device, dtype=torch.long).unsqueeze(1)
+        sos = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_outputs.device, dtype=torch.long).unsqueeze(1)
         tgt_input = torch.cat([sos, tgt[:, :-1, :]], dim=1)
 
         embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt_input, tgt_lens, enc=False)
@@ -487,7 +487,7 @@ class TextRNN(AutoEncoderNet):
         enc_output, hidden_state = self.encoder(embedded_phonemes)
         return (hidden_state, enc_output), pad_mask
 
-    def decode_sequence(self, target, enc_outputs, enc_ctxt_mask, teacher_ratio=1):
+    def decode_sequence(self, target, tgt_lens, enc_outputs, enc_ctxt_mask, teacher_ratio=1):
         """
         For easier training!  target is teacher forcing [batch_size x seq_len]
         """
@@ -538,8 +538,8 @@ class TextRNN(AutoEncoderNet):
 
         hidden_state, enc_output = enc_outputs
         batch_size = enc_output.shape[0]
-        outputs = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=memory.device, dtype=torch.long).unsqueeze(1)
-        stop_lens = torch.zeros(batch_size, device=memory.device).fill(max_len)
+        outputs = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long).unsqueeze(1)
+        stop_lens = torch.zeros(batch_size, device=enc_output.device).fill(max_len)
         
         # get a all SOS for first timestep
         input_ = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long).unsqueeze(1)
