@@ -220,7 +220,7 @@ class SpeechTransformer(AutoEncoderNet):
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
 
         # Maybe this is a bit overkil...
-        res, res_stop = (outputs + self.postprocess(outputs))[:, 1:, :], stop_pred[:, 1:]
+        res, res_stop = (outputs + self.postprocess(outputs))[:, 1:, :], stops[:, 1:]
         pad_mask = sent_lens_to_mask(stop_lens, res.shape[1])
         return res * pad_mask.unsqueeze(-1), res_stop * pad_mask, stop_lens
 
@@ -307,7 +307,7 @@ class SpeechRNN(AutoEncoderNet):
             self.decoder.attention_layer.clear_memory()
 
         # Maybe this is a bit overkil...
-        res, res_stop = (outputs + self.postprocess(outputs))[:, 1:, :], stop_pred[:, 1:]
+        res, res_stop = (outputs + self.postprocess(outputs))[:, 1:, :], stops[:, 1:]
         pad_mask = sent_lens_to_mask(stop_lens, res.shape[1])
         return res * pad_mask.unsqueeze(-1), res_stop * pad_mask, stop_lens
 
