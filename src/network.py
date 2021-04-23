@@ -284,7 +284,7 @@ class SpeechRNN(AutoEncoderNet):
         hidden_state, enc_output = enc_outputs
         batch_size = enc_output.shape[0]
         outputs = []
-        stops = []
+        stops = torch.zeros((batch_size, 1), device=enc_output.device)
         stop_lens = torch.full((batch_size,), max_len, device=enc_output.device)
         
         # get a all 0 frame for first timestep
@@ -296,8 +296,8 @@ class SpeechRNN(AutoEncoderNet):
 
         while keep_gen:
             (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
+            stops = torch.cat([stops, stop_pred.squeeze(2)], dim=1)
             stop_pred = stop_pred.squeeze()
-            stops.append(stop_pred)
             # set stop_lens here!
             outputs.append(dec_out)
             input_ = outputs[-1]
@@ -314,10 +314,10 @@ class SpeechRNN(AutoEncoderNet):
         # Maybe this is a bit overkil...
         pad_mask = sent_lens_to_mask(stop_lens, len(outputs))
 
-        res, res_stop = torch.stack(outputs, dim=1).squeeze(2), torch.stack(stops, dim=1).squeeze(1)
+        res, res_stop = torch.stack(outputs, dim=1).squeeze(2), stops[:, 1:]
         res = (res + self.postprocess(res)) * pad_mask.unsqueeze(-1)
         res_stop = res_stop * pad_mask
-        return res, res_stop
+        return res, res_stop, stop_lens
 
 
     def decode_sequence(self, target, target_len, enc_outputs, enc_ctxt_mask, teacher_ratio=1):
