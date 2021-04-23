@@ -295,7 +295,7 @@ class SpeechRNN(AutoEncoderNet):
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.init_memory(enc_output)
         while keep_gen:
-            (dec_out, stop_pred), hidden_state = self.decode(outputs[:, -1, :], hidden_state, enc_output, enc_ctxt_mask)
+            (dec_out, stop_pred), hidden_state = self.decode(outputs[:, -1, :].unsqueeze(1), hidden_state, enc_output, enc_ctxt_mask)
             stops = torch.cat([stops, stop_pred], dim=1)
             outputs = torch.cat([outputs, dec_out], dim=1)
 
@@ -321,7 +321,7 @@ class SpeechRNN(AutoEncoderNet):
         hidden_state, enc_output = enc_outputs
         batch_size, max_out_len = target.shape[0], target.shape[1]
         outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
-        input_ = outputs[:, -1, :]
+        input_ = outputs[:, -1, :].unsqueeze(1)
         stops = torch.zeros((batch_size, 1), device=enc_output.device)
         # get a all 0 frame for first timestep
         if self.decoder.attention == "lsa":
@@ -334,7 +334,7 @@ class SpeechRNN(AutoEncoderNet):
             if random.random() < teacher_ratio:
                 input_ = target[:, i, :].unsqueeze(1)
             else:
-                input_ = outputs[:, -1, :]
+                input_ = outputs[:, -1, :].unsqueeze(1)
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.clear_memory()
 
