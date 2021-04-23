@@ -140,6 +140,7 @@ def discriminator_target(output, target_type, smoothing=0.1):
     else:
         # target_type == 'speech' implicitly
         smoothed_target_label = [smoothing, 1 - smoothing]
+    smoothed_target_label = torch.as_tensor(smoothed_target_label).to(target)
     target[:,] = smoothed_target_label
     return target
 
@@ -155,7 +156,7 @@ def autoencoder_step(model, batch, use_dis_loss=False):
     gold_char, gold_mel, gold_stop = y
 
     if use_dis_loss:
-        text_pred, t_hid = model.text_ae(character, rec_enc_hid=use_dis_loss)
+        text_pred, t_hid = model.text_ae(character, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(1, 2, 0)
         t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech')
 
@@ -242,10 +243,6 @@ def optimizer_step(loss, model, optimizer, args):
     return loss.detach().cpu().item()
 
 def train_sp_step(losses, model, optimizer, batch, args):
-    model.text_m.train()
-    model.speech_m.train()
-    model.discriminator.eval()
-
     if args.use_discriminator:
         asr_loss, tts_loss, t_d_loss, s_d_loss = supervised_step(model, batch, args.use_discriminator)
         loss = tts_loss + asr_loss + t_d_loss + s_d_loss
@@ -264,10 +261,6 @@ def train_sp_step(losses, model, optimizer, batch, args):
         losses['s_sp_d'].append(s_d_loss.detach().cpu().item())
 
 def train_ae_step(losses, model, optimizer, batch, args):
-    model.text_m.train()
-    model.speech_m.train()
-    model.discriminator.eval()
-
     if args.use_discriminator:
         t_ae_loss, s_ae_loss, t_d_loss, s_d_loss = autoencoder_step(model, batch, args.use_discriminator)
         loss = t_ae_loss + s_ae_loss + t_d_loss + s_d_loss
@@ -286,9 +279,6 @@ def train_ae_step(losses, model, optimizer, batch, args):
         losses['s_ae_d'].append(s_d_loss.detach().cpu().item())
 
 def train_cm_step(losses, model, optimizer, batch, args):
-    model.text_m.train()
-    model.speech_m.train()
-    model.discriminator.eval()
     # NOTE: do not use cross_model here bc need to take optimizer step inbetween
     x, y = process_batch(batch)
     character, mel, _, mel_len  = x
@@ -331,10 +321,6 @@ def train_cm_step(losses, model, optimizer, batch, args):
         losses['cm_t_cm_d'].append(cm_t_d_loss.detach().cpu().item())
 
 def train_discriminator_step(losses, model, optimizer, batch, args):
-    model.text_m.eval()
-    model.speech_m.eval()
-    model.discriminator.train()
-
     t_d_loss, s_d_loss = discriminator_step(model, batch)
 
     loss = t_d_loss + s_d_loss
@@ -343,6 +329,13 @@ def train_discriminator_step(losses, model, optimizer, batch, args):
     losses['t_d'].append(t_d_loss.detach().cpu().item())
     losses['s_d'].append(s_d_loss.detach().cpu().item())
 
+def freeze_model_parameters(model):
+    for param in model.parameters():
+        param.requires_grad = False
+
+def unfreeze_model_parameters(model):
+    for param in model.parameters():
+        param.requires_grad = True
 
 #####----- Train and evaluate -----#####
 def evaluate(model, valid_dataloader):
@@ -399,7 +392,6 @@ def train(args):
     print("Training model with {} parameters".format(model.num_params()))
     per, eval_losses = evaluate(model, valid_dataloader)
     log_loss_metrics(eval_losses, -1, eval=True)
-
     for epoch in range(s_epoch, args.epochs):
         model.train()
         losses = defaultdict(list)
@@ -417,6 +409,12 @@ def train(args):
         bar = tqdm(range(0, epoch_steps))
         bar.set_description("Epoch {}".format(epoch))
         for _ in bar:
+            if args.use_discriminator:
+                # need to freeze the disciminator first
+                freeze_model_parameters(model.discriminator)
+                unfreeze_model_parameters(model.text_m)
+                unfreeze_model_parameters(model.speech_m)
+
             # DENOISING AUTO ENCODER
             for _ in range(0, args.ae_steps):
                 batch = batch_getter.get_unsupervised_batch()
@@ -434,6 +432,9 @@ def train(args):
 
             # DISCRIMINATOR
             if args.use_discriminator:
+                unfreeze_model_parameters(model.discriminator)
+                freeze_model_parameters(model.text_m)
+                freeze_model_parameters(model.speech_m)
                 for _ in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
                     train_discriminator_step(losses, model, optimizer, batch, args)
@@ -568,7 +569,7 @@ def initialize_model(args):
 
     if args.use_discriminator:
         discriminator = Discriminator(args.hidden).to(DEVICE)
-    model = UNAST(text_m, speech_m, discriminator)
+    model = UNAST(text_m, speech_m, discriminator, teacher)
 
     # initialize optimizer
     optimizer = None
