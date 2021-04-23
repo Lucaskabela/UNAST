@@ -733,6 +733,8 @@ if __name__ == "__main__":
     if args.tb_log_path:
         WRITER = SummaryWriter(log_dir=args.tb_log_path, flush_secs=60)
         WRITER.add_text("params", str(vars(args)), 0)
+
     train(args)
+
     if WRITER:
         WRITER.close()
