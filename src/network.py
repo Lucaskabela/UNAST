@@ -126,7 +126,7 @@ class UNAST(nn.Module):
         return pred, stop_pred
 
     def asr(self, text, text_len, mel, mel_len, infer=False):
-        s_e_o, s_masks = self.speech_m.encode(mel)
+        s_e_o, s_masks = self.speech_m.encode(mel, mel_len)
         if not infer:
             return self.text_m.decode_sequence(text, text_len, s_e_o, 
                 s_masks, teacher_ratio=self.teacher.get_val())
@@ -203,7 +203,7 @@ class SpeechTransformer(AutoEncoderNet):
         input_mask, input_pad_mask = masks
         batch_size = enc_output.shape[0]
         outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
-        stop_lens = torch.zeros(batch_size, device=memory.device).fill(max_len)
+        stop_lens = torch.full(batch_size, max_len, device=memory.device)
         stops = torch.zeros((batch_size, 1), device=memory.device)
         i = 0
         keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
@@ -287,11 +287,11 @@ class SpeechRNN(AutoEncoderNet):
         batch_size = enc_output.shape[0]
         outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_output.device)
         stops = torch.zeros((batch_size, 1), device=enc_output.device)
-        stop_lens = torch.zeros(batch_size, device=enc_output.device)
+        stop_lens = torch.full(batch_size, max_len, device=enc_output.device)
         
         # get a all 0 frame for first timestep
         i = 0
-        keep_gen = torch.any(stop_lens.eq(0)) and i < max_len
+        keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.init_memory(enc_output)
         while keep_gen:
@@ -300,7 +300,7 @@ class SpeechRNN(AutoEncoderNet):
             outputs = torch.cat([outputs, dec_out], dim=1)
 
             # double check this!
-            stop_mask = (torch.sigmoid(stop_pred.squeeze()) >= .5).logical_and(stop_lens == 0)
+            stop_mask = (torch.sigmoid(stop_pred.squeeze()) >= .5).logical_and(stop_lens == max_len)
             stop_lens[stop_mask] = i
             i += 1
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
@@ -412,7 +412,7 @@ class TextTransformer(AutoEncoderNet):
         input_mask, input_pad_mask = masks
         batch_size = memory.shape[0]
         outputs = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=memory.device, dtype=torch.long).unsqueeze(1)
-        stop_lens = torch.zeros(batch_size, device=memory.device).fill(max_len)
+        stop_lens = torch.full(batch_size, max_len,  device=memory.device)
 
         i = 0
         keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
@@ -539,7 +539,7 @@ class TextRNN(AutoEncoderNet):
         hidden_state, enc_output = enc_outputs
         batch_size = enc_output.shape[0]
         outputs = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long).unsqueeze(1)
-        stop_lens = torch.zeros(batch_size, device=enc_output.device).fill(max_len)
+        stop_lens = torch.full(batch_size, max_len, device=enc_output.device)
         
         # get a all SOS for first timestep
         input_ = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_output.device, dtype=torch.long).unsqueeze(1)
