@@ -178,7 +178,7 @@ class SpeechTransformer(AutoEncoderNet):
         return enc_outputs, (input_mask, input_pad_mask)
 
     def decode(self, tgt, tgt_lens, enc_outputs, enc_mask):
-        tgt_mask = generate_square_subsequent_mask(tgt.shape(1))
+        tgt_mask = generate_square_subsequent_mask(tgt.shape[1], tgt.device)
         embedded_tgt = self.pos_emb(self.prenet(tgt))
         out = self.decoder(embedded_tgt, enc_outputs, tgt_mask)
         return self.postnet.mel_and_stop(out[:, -1, :].unsqueeze(1))
@@ -190,19 +190,24 @@ class SpeechTransformer(AutoEncoderNet):
         input_mask, input_pad_mask = masks
         batch_size = memory.shape[0]
         outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
-        stop_lens = torch.full((batch_size,), max_len, device=memory.device)
         stops = torch.zeros((batch_size, 1), device=memory.device)
+        stop_lens = torch.full((batch_size,), max_len, device=memory.device)
+        
+        # get a all 0 frame for first timestep
         i = 0
         keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
         while keep_gen:
-            (dec_out, stop_pred) = self.decode(outputs, stop_lens, memory, input_pad_mask)
+            input_ = outputs
+            (dec_out, stop_pred) = self.decode(input_, stop_lens, memory, input_pad_mask)
             stops = torch.cat([stops, stop_pred.squeeze(2)], dim=1)
             outputs = torch.cat([outputs, dec_out], dim=1)
-
+            stop_pred = stop_pred.squeeze()
             # set stop_lens here!
-            stop_mask = (torch.sigmoid(stop_pred.squeeze()) >= .5).logical_and(stop_lens == max_len)
+            i += 1
+
+            # double check this!
+            stop_mask = (torch.sigmoid(stop_pred) >= .5).logical_and(stop_lens == max_len)
             stop_lens[stop_mask] = i
-            i +=1
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
 
         # Maybe this is a bit overkil...
@@ -397,7 +402,7 @@ class TextTransformer(AutoEncoderNet):
         return enc_outputs, (input_mask, input_pad_mask)
 
     def decode(self, tgt, tgt_lens, enc_outputs, enc_mask):
-        tgt_mask = generate_square_subsequent_mask(tgt.shape(1))
+        tgt_mask = generate_square_subsequent_mask(tgt.shape[1], tgt.device)
         embedded_tgt = self.pos_emb(self.prenet(tgt))
         out = self.decoder(embedded_tgt, enc_outputs, tgt_mask)
         return self.postprocess(out[:, -1, :].unsqueeze(1))
@@ -405,7 +410,7 @@ class TextTransformer(AutoEncoderNet):
     def postprocess(self, out):
         return self.postnet(out)
 
-    def infer_sequence(self, memory, masks, max_len=815):
+    def infer_sequence(self, memory, masks, max_len=300):
         input_mask, input_pad_mask = masks
         batch_size = memory.shape[0]
         outputs = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=memory.device, dtype=torch.long).unsqueeze(1)
