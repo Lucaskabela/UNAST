@@ -440,8 +440,8 @@ class TextTransformer(AutoEncoderNet):
         return self.postprocess(dec_out)
 
     def forward(self, text, text_len, noise_in=False, teacher_ratio=1):
-        enc_outputs, (input_mask, input_pad_mask) = self.encode(text, text_len, noise_in)
-        return self.decode_sequence(text, text_len, enc_outputs, input_mask, input_pad_mask)
+        enc_outputs, masks = self.encode(text, text_len, noise_in)
+        return self.decode_sequence(text, text_len, enc_outputs, masks)
         
 
 class TextRNN(AutoEncoderNet):
