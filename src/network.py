@@ -94,44 +94,53 @@ class UNAST(nn.Module):
         self.discriminator = discriminator
         self.teacher = teacher
 
-    def text_ae(self, text, text_len):
-        return self.text_m.forward(text, text_len, noise_in=True, teacher_ratio=self.teacher.get_val())
+    def text_ae(self, text, text_len, ret_enc_hid=False):
+        return self.text_m.forward(text, text_len, noise_in=True, teacher_ratio=self.teacher.get_val(), ret_enc_hid=ret_enc_hid)
 
-    def speech_ae(self, mel, mel_len):
-        return self.speech_m.forward(mel, mel_len, noise_in=True, teacher_ratio=self.teacher.get_val())
+    def speech_ae(self, mel, mel_len, ret_enc_hid=False):
+        return self.speech_m.forward(mel, mel_len, noise_in=True, ret_enc_hid=ret_enc_hid, teacher_ratio=self.teacher.get_val())
 
-    def cm_text_in(self, text, text_len):
+    def cm_text_in(self, text, text_len, ret_enc_hid=False):
         t_e_o, t_mask = self.text_m.encode(text, text_len)
         _, post_pred, _, pred_lens = self.speech_m.infer_sequence(t_e_o, t_mask)
         cm_s_e_o, cm_mask = self.speech_m.encode(post_pred, pred_lens)
         text_pred = self.text_m.decode_sequence(text, text_len, cm_s_e_o, cm_mask,
             teacher_ratio=self.teacher.get_val())
+        if ret_enc_hid:
+            return text_pred, t_e_o[0], cm_s_e_o[0]
         return text_pred
 
-    def cm_speech_in(self, mel, mel_len):
+    def cm_speech_in(self, mel, mel_len, ret_enc_hid=False):
         s_e_o, s_mask = self.speech_m.encode(mel, mel_len)
         text_pred, text_pred_len = self.text_m.infer_sequence(s_e_o, s_mask)
         cm_t_e_o, cm_t_masks = self.text_m.encode(text_pred, text_pred_len)
         pre_pred, post_pred, stop_pred = self.speech_m.decode_sequence(mel, mel_len, cm_t_e_o,
             cm_t_masks, teacher_ratio=self.teacher.get_val())
+        if ret_enc_hid:
+            return pre_pred, post_pred, stop_pred, s_e_o[0], cm_t_e_o[0]
         return pre_pred, post_pred, stop_pred
 
-    def tts(self, text, text_len, mel, mel_len, infer=False):
+    def tts(self, text, text_len, mel, mel_len, infer=False, ret_enc_hid=False):
         t_e_o, t_masks = self.text_m.encode(text, text_len)
         if not infer:
             pre_pred, post_pred, stop_pred = self.speech_m.decode_sequence(mel, mel_len, t_e_o,
                 t_masks, teacher_ratio=self.teacher.get_val())
         else:
             pre_pred, post_pred, stop_pred, _ = self.speech_m.infer_sequence(t_e_o, t_masks)
+        if ret_enc_hid:
+            return pre_pred, post_pred, stop_pred, t_e_o[0]
         return pre_pred, post_pred, stop_pred
 
-    def asr(self, text, text_len, mel, mel_len, infer=False):
+    def asr(self, text, text_len, mel, mel_len, infer=False, ret_enc_hid=False):
         s_e_o, s_masks = self.speech_m.encode(mel, mel_len)
         if not infer:
             return self.text_m.decode_sequence(text, text_len, s_e_o,
                 s_masks, teacher_ratio=self.teacher.get_val())
         else:
-            return self.text_m.infer_sequence(s_e_o, s_masks)
+            text_pred = self.text_m.infer_sequence(s_e_o, s_masks)
+        if ret_enc_hid:
+            return text_pred, s_e_o[0]
+        return text_pred
 
     def num_params(self):
         pytorch_total_params = 0
@@ -141,19 +150,22 @@ class UNAST(nn.Module):
         return pytorch_total_params
 
 class Discriminator(nn.Module):
-    # TODO: Fill in with linear layers :)
-    def __init__(self, enc_dim, hidden, out_classes=2, dropout=.2):
+    # From Lample et al.
+    # "3 hidden layers, 1024 hidden layers, smoothing coefficient 0.1"
+    def __init__(self, enc_dim, hidden=1024, out_classes=2, dropout=.2, relu=.2):
         super(Discriminator, self).__init__()
         self.fc1 = nn.Linear(enc_dim, hidden)
         self.fc2 = nn.Linear(hidden, hidden)
-        self.fc3 = nn.Linear(hidden, out_classes)
+        self.fc3 = nn.Linear(hidden, hidden)
+        self.fc4 = nn.Linear(hidden, out_classes)
         self.dropout = nn.Dropout(p=dropout)
-        self.non_linear = nn.LeakyRelu(.2)
+        self.non_linear = nn.LeakyReLU(relu)
 
     def forward(self, enc_output):
         temp = self.dropout(self.non_linear(self.fc1(enc_output)))
         temp2 = self.dropout(self.non_linear(self.fc2(temp)))
-        return self.fc3(temp2)
+        temp3 = self.dropout(self.non_linear(self.fc3(temp2)))
+        return self.fc4(temp3)
 
 class SpeechTransformer(AutoEncoderNet):
 
@@ -250,7 +262,6 @@ class SpeechRNN(AutoEncoderNet):
         self.decoder = RNNDecoder(args.e_in, args.hidden * self.encoder.num_dir, args.hidden, dropout=args.d_drop,
             num_layers=args.num_layers, attention=args.d_attn, attn_dim=args.attn_dim)
         self.postnet = SpeechPostnet(args.num_mels, args.hidden, p=args.s_post_drop)
-
 
     def preprocess(self, mel, mel_lens):
         max_seq_len = mel.shape[1]
@@ -359,9 +370,11 @@ class SpeechRNN(AutoEncoderNet):
     def postprocess(self, dec_output, distrib=False):
         return self.postnet(dec_output)
 
-    def forward(self, mel, mel_len, noise_in=False, teacher_ratio=1):
+    def forward(self, mel, mel_len, noise_in=False, ret_enc_hid=False teacher_ratio=1):
         encoder_outputs, pad_mask = self.encode(mel, mel_len, noise_in=noise_in)
         pre_pred, post_pred, stop_pred = self.decode_sequence(mel, mel_len, encoder_outputs, pad_mask, teacher_ratio)
+        if ret_enc_hid:
+            return pre_pred, post_pred, stop_pred, encoder_outputs[0]
         return pre_pred, post_pred, stop_pred
 
 def generate_square_subsequent_mask(sz, DEVICE):
@@ -572,7 +585,9 @@ class TextRNN(AutoEncoderNet):
         res = res * pad_mask
         return res, stop_lens
 
-    def forward(self, text, text_len, noise_in=False, teacher_ratio=1):
+    def forward(self, text, text_len, noise_in=False, teacher_ratio=1, ret_enc_hid=False):
         encoder_outputs, pad_mask = self.encode(text, text_len, noise_in=noise_in)
         pred = self.decode_sequence(text, text_len, encoder_outputs, pad_mask, teacher_ratio)
+        if ret_enc_hid:
+            return pred, encoder_outputs[0]
         return pred
