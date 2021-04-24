@@ -165,22 +165,6 @@ class SpeechTransformer(AutoEncoderNet):
         self.decoder = TransformerDecoder( args.e_in, args.nhead, args.ffn_dim, args.d_drop, args.num_layers)
         self.postnet = SpeechPostnet(args.num_mels, args.hidden, p=args.s_post_drop)
 
-    def generate_square_subsequent_mask(sz):
-        mask = (torch.triu(torch.ones((sz, sz), device=DEVICE)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
-
-    def create_mask(x, x_lens, enc=True):
-        max_seq_len = x.shape[1]
-        if enc:
-            x_mask = torch.zeros((max_seq_len, max_seq_len), device=DEVICE, dtype=torch.bool)
-        else:
-            x_mask = generate_square_subsequent_mask(max_seq_len)
-
-        pad_mask = torch.logical_not(sent_lens_to_mask(x_lens, max_seq_len))
-        print(pad_mask)
-        return x_mask, pad_mask
-
     def preprocess(self, input_, input_lens, enc=True):
         input_mask, input_pad_mask = create_mask(input_, input_lens, enc=True)
         pre_in =  self.prenet(input_)
@@ -370,7 +354,22 @@ class SpeechRNN(AutoEncoderNet):
         encoder_outputs, pad_mask = self.encode(mel, mel_len, noise_in=noise_in)
         pred, stop_pred = self.decode_sequence(mel, mel_len, encoder_outputs, pad_mask, teacher_ratio)
         return pred, stop_pred
-        
+
+def generate_square_subsequent_mask(sz, DEVICE):
+    mask = (torch.triu(torch.ones((sz, sz), device=DEVICE)) == 1).transpose(0, 1)
+    mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
+    return mask
+
+def create_mask(x, x_lens, enc=True):
+    max_seq_len = x.shape[1]
+    if enc:
+        x_mask = torch.zeros((max_seq_len, max_seq_len), device=x.device, dtype=torch.bool)
+    else:
+        x_mask = generate_square_subsequent_mask(max_seq_len, x.device)
+
+    pad_mask = torch.logical_not(sent_lens_to_mask(x_lens, max_seq_len))
+    return x_mask, pad_mask
+
 class TextTransformer(AutoEncoderNet):
     # TODO: Fill in with pre/post needed and enc/dec
     def __init__(self, args):
@@ -381,21 +380,6 @@ class TextTransformer(AutoEncoderNet):
         self.decoder = TransformerDecoder( args.e_in, args.nhead, args.ffn_dim, args.d_drop, args.num_layers)
         self.postnet = TextPostnet(args.hidden, args.t_post_drop)
 
-    def generate_square_subsequent_mask(sz):
-        mask = (torch.triu(torch.ones((sz, sz), device=DEVICE)) == 1).transpose(0, 1)
-        mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-        return mask
-
-    def create_mask(x, x_lens, enc=True):
-        max_seq_len = x.shape[1]
-        if enc:
-            x_mask = torch.zeros((max_seq_len, max_seq_len), device=DEVICE, dtype=torch.bool)
-        else:
-            x_mask = generate_square_subsequent_mask(max_seq_len)
-
-        pad_mask = torch.logical_not(sent_lens_to_mask(x_lens, max_seq_len))
-        return x_mask, pad_mask
-
     def preprocess(self, input_, input_lens, enc=True, noise_in=False):
         input_mask, input_pad_mask = create_mask(input_, input_lens, enc=True)
         embedded_phonemes = self.prenet.emb_dropout(self.prenet.embed(text))
@@ -405,8 +389,6 @@ class TextTransformer(AutoEncoderNet):
         return self.pos_emb(pre_in) (input_mask, input_pad_mask)
 
     def encode(self, input_, input_lens, noise_in=False):
-        if noise_in:
-            input_ = noise_fn(input_)
         embedded_input, (input_mask, input_pad_mask) = self.preprocess(input_, 
             input_lens, noise_in=noise_in)
         enc_outputs = self.encoder(embedded_input, input_mask, input_pad_mask)
