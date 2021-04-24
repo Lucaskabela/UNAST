@@ -179,10 +179,11 @@ class SpeechTransformer(AutoEncoderNet):
 
     def decode(self, tgt, tgt_lens, enc_outputs, enc_mask):
         embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt, tgt_lens, enc=False)
-        return self.postnet.mel_and_stop(self.decoder(embedded_tgt, enc_outputs, tgt_mask, None, tgt_pad_mask, enc_mask))
+        out = self.decoder(embedded_tgt, enc_outputs, tgt_mask, None, tgt_pad_mask, enc_mask)
+        return self.postnet.mel_and_stop(out[:, -1, :].unsqueeze(1))
 
-    def postprocess(self, decoded_latent):
-        return self.postnet(dec_output)
+    def postprocess(self, out):
+        return self.postnet(out)
 
     def infer_sequence(self, memory, masks, max_len=815):
         input_mask, input_pad_mask = masks
@@ -217,7 +218,7 @@ class SpeechTransformer(AutoEncoderNet):
         input_mask, input_pad_mask = masks
 
         # Need to adjust tgt with "go" padding:
-        sos = torch.zeros((batch_size, 1, self.postnet.num_mels), device=enc_outputs.device)
+        sos = torch.zeros((tgt.shape[0], 1, self.postnet.num_mels), device=enc_outputs.device)
         tgt_input = torch.cat([sos, tgt[:, :-1, :]], dim=1)
 
         embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt_input, tgt_lens, enc=False)
@@ -396,10 +397,11 @@ class TextTransformer(AutoEncoderNet):
 
     def decode(self, tgt, tgt_lens, enc_outputs, enc_mask):
         embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt, tgt_lens, enc=False)
-        return self.postprocess(self.decoder(embedded_tgt, enc_outputs, tgt_mask, None, tgt_pad_mask, enc_mask))
+        out = self.decoder(embedded_tgt, enc_outputs, tgt_mask, None, tgt_pad_mask, enc_mask)
+        return self.postprocess(out[:, -1, :].unsqueeze(1))
 
-    def postprocess(self, decoded_latent):
-        return self.postnet(dec_output)
+    def postprocess(self, out):
+        return self.postnet(out)
 
     def infer_sequence(self, memory, masks, max_len=815):
         input_mask, input_pad_mask = masks
@@ -430,14 +432,14 @@ class TextTransformer(AutoEncoderNet):
     def decode_sequence(self, tgt, tgt_lens, enc_outputs, masks, teacher_ratio=1):
         input_mask, input_pad_mask = masks
         # Need to adjust tgt with "go" padding:
-        sos = torch.as_tensor([SOS_IDX for i in range(0, batch_size)], device=enc_outputs.device, dtype=torch.long).unsqueeze(1)
-        tgt_input = torch.cat([sos, tgt[:, :-1, :]], dim=1)
+        sos = torch.as_tensor([SOS_IDX for i in range(0, tgt.shape[0])], device=enc_outputs.device, dtype=torch.long).unsqueeze(1)
+        tgt_input = torch.cat([sos, tgt[:, :-1]], dim=1)
 
         embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt_input, tgt_lens, enc=False)
         outs = self.decoder(embedded_tgt, enc_outputs, tgt_mask, None,
                                         tgt_pad_mask, input_pad_mask)
 
-        return self.postprocess(dec_out)
+        return self.postprocess(outs)
 
     def forward(self, text, text_len, noise_in=False, teacher_ratio=1):
         enc_outputs, masks = self.encode(text, text_len, noise_in)
