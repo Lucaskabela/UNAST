@@ -190,11 +190,11 @@ def supervised_step(model, batch, use_dis_loss=False):
         t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech')
 
         text_pred, s_hid = model.asr(text, text_len, mel_aug, mel_len, ret_enc_hid=use_dis_loss)
+        text_pred = model.asr(text, text_len, mel_aug, mel_len)
         text_pred = text_pred.permute(0, 2, 1)
         s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text')
     else:
         pre_pred, post_pred, stop_pred = model.tts(text, text_len, mel, mel_len)
-        mel_aug = specaugment(mel, mel_len)
         text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
 
     tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), post_pred, mel_len, stop_pred) + speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, mel_len, stop_pred)
@@ -240,15 +240,15 @@ def discriminator_hidden_to_loss(model, hid, target_type):
     return d_loss
 
 def discriminator_step(model, batch):
-    x, y = process_batch(batch)
-    character, mel, _, _  = x
+    x, _ = process_batch(batch)
+    text, mel, text_len, mel_len = x
 
     # text
-    _, t_hid, _ = model.text_m.encode(character)
+    (t_hid, _), _ = model.text_m.encode(text, text_len)
     t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'text')
 
     # speech
-    _, s_hid, _ = model.speech_m.encode(mel)
+    (s_hid, _), _ = model.speech_m.encode(mel, mel_len)
     s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'speech')
     return t_d_loss, s_d_loss
 
@@ -303,7 +303,7 @@ def train_ae_step(losses, model, batch, accum_steps, use_discriminator):
 
 def train_cm_step(losses, model, batch, accum_steps, use_discriminator):
     # NOTE: do not use cross_model here bc need to take optimizer step inbetween
-    x, y = process_batch(batch)
+    batch = process_batch(batch)
 
     if use_discriminator:
         t_cm_loss, s_cm_loss, s_d_loss, cm_t_d_loss, t_d_loss, cm_s_d_loss = crossmodel_step(model, batch, use_discriminator)

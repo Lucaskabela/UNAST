@@ -134,7 +134,7 @@ class UNAST(nn.Module):
     def asr(self, text, text_len, mel, mel_len, infer=False, ret_enc_hid=False):
         s_e_o, s_masks = self.speech_m.encode(mel, mel_len)
         if not infer:
-            return self.text_m.decode_sequence(text, text_len, s_e_o,
+            text_pred = self.text_m.decode_sequence(text, text_len, s_e_o,
                 s_masks, teacher_ratio=self.teacher.get_val())
         else:
             text_pred = self.text_m.infer_sequence(s_e_o, s_masks)
@@ -370,7 +370,7 @@ class SpeechRNN(AutoEncoderNet):
     def postprocess(self, dec_output, distrib=False):
         return self.postnet(dec_output)
 
-    def forward(self, mel, mel_len, noise_in=False, ret_enc_hid=False teacher_ratio=1):
+    def forward(self, mel, mel_len, noise_in=False, ret_enc_hid=False, teacher_ratio=1):
         encoder_outputs, pad_mask = self.encode(mel, mel_len, noise_in=noise_in)
         pre_pred, post_pred, stop_pred = self.decode_sequence(mel, mel_len, encoder_outputs, pad_mask, teacher_ratio)
         if ret_enc_hid:
