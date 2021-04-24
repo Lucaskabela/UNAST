@@ -190,7 +190,6 @@ def supervised_step(model, batch, use_dis_loss=False):
         t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech')
 
         text_pred, s_hid = model.asr(text, text_len, mel_aug, mel_len, ret_enc_hid=use_dis_loss)
-        text_pred = model.asr(text, text_len, mel_aug, mel_len)
         text_pred = text_pred.permute(0, 2, 1)
         s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text')
     else:
