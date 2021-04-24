@@ -8,7 +8,7 @@ Contains the code for training the encoder/decoders, including:
 from utils import *
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
-from network import TextRNN, SpeechRNN, UNAST
+from network import TextRNN, SpeechRNN, TextTransformer, SpeechTransformer, UNAST
 from tqdm import tqdm
 import audio_parameters as ap
 import argparse

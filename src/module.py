@@ -8,6 +8,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from collections import OrderedDict
+import math
 
 from data.symbols import symbols
 
@@ -274,8 +275,8 @@ class TransformerEncoder(nn.Module):
 class TransformerDecoder(nn.Module):
     def __init__(self, ninp, nhead, ffn_dim, dropout, nlayers):
         super(TransformerDecoder, self).__init__()
-        decoder_layer = TransformerDecoderLayer(ninp, nhead, ffn_dim, dropout)
-        self.transformer_decoder = TransformerDecoder(decoder_layer, nlayers)
+        decoder_layer = torch.nn.TransformerDecoderLayer(ninp, nhead, ffn_dim, dropout)
+        self.transformer_decoder = torch.nn.TransformerDecoder(decoder_layer, nlayers)
 
     def forward(self, tgt, memory, tgt_mask=None, memory_mask=None, tgt_key_padding_mask=None, memory_key_padding_mask=None):
         tgt = tgt.transpose(0, 1)
