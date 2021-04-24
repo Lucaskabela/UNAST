@@ -101,17 +101,19 @@ class UNAST(nn.Module):
         return self.speech_m.forward(mel, mel_len, noise_in=True, teacher_ratio=self.teacher.get_val())
 
     def cm_text_in(self, text, text_len):
-        t_e_o, t_mask = self.text_m.encode(text, text_len)
-        pred, _, pred_lens = self.speech_m.infer_sequence(t_e_o, t_mask)
-        cm_s_e_o, cm_mask = self.speech_m.encode(pred, pred_lens)
+        with torch.no_grad():
+            t_e_o, t_mask = self.text_m.encode(text, text_len)
+            pred, _, pred_lens = self.speech_m.infer_sequence(t_e_o, t_mask)
+        cm_s_e_o, cm_mask = self.speech_m.encode(pred.detach(), pred_lens.detach())
         text_pred = self.text_m.decode_sequence(text, text_len, cm_s_e_o, cm_mask,
             teacher_ratio=self.teacher.get_val())
         return text_pred
 
     def cm_speech_in(self, mel, mel_len):
-        s_e_o, s_mask = self.speech_m.encode(mel, mel_len)
-        text_pred, text_pred_len = self.text_m.infer_sequence(s_e_o, s_mask)
-        cm_t_e_o, cm_t_masks = self.text_m.encode(text_pred, text_pred_len)
+        with torch.no_grad():
+            s_e_o, s_mask = self.speech_m.encode(mel, mel_len)
+            text_pred, text_pred_len = self.text_m.infer_sequence(s_e_o, s_mask)
+        cm_t_e_o, cm_t_masks = self.text_m.encode(text_pred.detach(), text_pred_len.detach())
         pred, stop_pred = self.speech_m.decode_sequence(mel, mel_len, cm_t_e_o, 
             cm_t_masks, teacher_ratio=self.teacher.get_val())
         return pred, stop_pred
