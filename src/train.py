@@ -155,39 +155,41 @@ def crossmodel_step(model, batch):
 
 
 #####---- Use these to train on a task -----#####
-def optimizer_step(loss, model, optimizer, args):
+def optimizer_step(model, optimizer, args):
 
     # Take a optimizer step!
-    loss.backward()
     if args.grad_clip > 0.0:
         nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
     optimizer.step()
     optimizer.zero_grad(set_to_none=True)
 
-def train_sp_step(losses, model, batch):
+def train_sp_step(losses, model, batch, accum_steps):
     batch = process_batch(batch)
     asr_loss, tts_loss = supervised_step(model, batch)
-    loss = tts_loss + asr_loss
+    loss = (tts_loss + asr_loss) / accum_steps
+    loss.backward()
 
     # Log losses
     losses['asr_'].append(asr_loss.detach().item())
     losses['tts_'].append(tts_loss.detach().item())
     return loss
 
-def train_ae_step(losses, model, batch):
+def train_ae_step(losses, model, batch, accum_steps):
     batch = process_batch(batch)
     t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
-    loss = t_ae_loss + s_ae_loss
+    loss = (t_ae_loss + s_ae_loss) / accum_steps
+    loss.backward()
 
     # Log losses
     losses['t_ae'].append(t_ae_loss.detach().item())
     losses['s_ae'].append(s_ae_loss.detach().item())
     return loss
 
-def train_cm_step(losses, model, batch):
+def train_cm_step(losses, model, batch, accum_steps):
     batch = process_batch(batch)
     t_cm_loss, s_cm_loss = crossmodel_step(model, batch)
-    loss = s_cm_loss + t_cm_loss
+    loss = (s_cm_loss + t_cm_loss) / accum_steps
+    loss.backward()
 
     # Log losses
     losses['s_cm'].append(s_cm_loss.detach().item())
@@ -249,7 +251,7 @@ def train(args):
     print("Training model with {} parameters".format(model.num_params()))
     per, eval_losses = evaluate(model, valid_dataloader)
     log_loss_metrics(eval_losses, -1, eval=True)
-
+    accum_steps = args.ae_steps + args.cm_steps + args.sp_steps
     for epoch in range(s_epoch, args.epochs):
         model.train()
         losses = defaultdict(list)
@@ -267,25 +269,23 @@ def train(args):
         bar = tqdm(range(0, epoch_steps))
         bar.set_description("Epoch {}".format(epoch))
         for _ in bar:
-            loss = 0
             # DENOISING AUTO ENCODER
             for _ in range(0, args.ae_steps):
                 batch = batch_getter.get_unsupervised_batch()
-                loss += train_ae_step(losses, model, batch)
+                train_ae_step(losses, model, batch, accum_steps)
 
             # CM TTS/ASR
             for _ in range(0, args.cm_steps):
                 batch = batch_getter.get_unsupervised_batch()
-                loss += train_cm_step(losses, model, batch)
+                train_cm_step(losses, model, batch, accum_steps)
 
             # SUPERVISED
             for _ in range(0, args.sp_steps):
                 batch = batch_getter.get_supervised_batch()
-                loss += train_sp_step(losses, model, batch)
+                train_sp_step(losses, model, batch, accum_steps)
 
             # Gradients have accumulated - lets back prop and free memory
-            optimizer_step(loss, model, optimizer, args)
-            del loss
+            optimizer_step(model, optimizer, args)
             # DISCRIMINATOR
             if args.use_discriminator:
                 for _ in range(0, args.d_steps):
