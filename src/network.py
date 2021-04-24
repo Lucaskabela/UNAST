@@ -161,8 +161,8 @@ class SpeechTransformer(AutoEncoderNet):
         super(SpeechTransformer, self).__init__()
         self.prenet = SpeechPrenet(args.num_mels, args.s_pre_hid, args.e_in, p=args.s_pre_drop)
         self.pos_emb = PositionalEncoding( args.e_in)
-        self.encoder = TransformerEncoder( args.e_in, args.nhead, args.hidden, args.e_drop, args.num_layers)
-        self.decoder = TransformerDecoder( args.e_in, args.nhead, args.hidden, args.d_drop, args.num_layers)
+        self.encoder = TransformerEncoder( args.e_in, args.nhead, args.ffn_dim, args.e_drop, args.num_layers)
+        self.decoder = TransformerDecoder( args.e_in, args.nhead, args.ffn_dim, args.d_drop, args.num_layers)
         self.postnet = SpeechPostnet(args.num_mels, args.hidden, p=args.s_post_drop)
 
     def generate_square_subsequent_mask(sz):
@@ -220,9 +220,12 @@ class SpeechTransformer(AutoEncoderNet):
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
 
         # Maybe this is a bit overkil...
-        res, res_stop = (outputs + self.postprocess(outputs))[:, 1:, :], stops[:, 1:]
-        pad_mask = sent_lens_to_mask(stop_lens, res.shape[1])
-        return res * pad_mask.unsqueeze(-1), res_stop * pad_mask, stop_lens
+        pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1] - 1)
+        res, res_stop = (outputs + self.postprocess(outputs)), stops[:, 1:]
+        res = res[:, 1:, :]
+        res = res * pad_mask.unsqueeze(-1)
+        res_stop = res_stop * pad_mask
+        return res, res_stop, stop_lens
 
     def decode_sequence(self, tgt, tgt_lens, enc_outputs, masks, teacher_ratio=1):
         # No use for teacher ratio here...
@@ -292,7 +295,6 @@ class SpeechRNN(AutoEncoderNet):
         keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
         if self.decoder.attention == "lsa":
             self.decoder.attention_layer.init_memory(enc_output)
-
         while keep_gen:
             input_ = outputs[:, -1, :].unsqueeze(1)
             (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
@@ -312,7 +314,7 @@ class SpeechRNN(AutoEncoderNet):
 
         # Maybe this is a bit overkil...
         pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1] - 1)
-        res, res_stop = (res + self.postprocess(res)), stops[:, 1:]
+        res, res_stop = (outputs + self.postprocess(outputs)), stops[:, 1:]
         res = res[:, 1:, :]
         res = res * pad_mask.unsqueeze(-1)
         res_stop = res_stop * pad_mask
@@ -375,8 +377,8 @@ class TextTransformer(AutoEncoderNet):
         super(TextTransformer, self).__init__()
         self.prenet = TextPrenet(args.t_emb_dim, args.e_in, p=args.t_pre_drop)
         self.pos_emb = PositionalEncoding( args.e_in)
-        self.encoder = TransformerEncoder( args.e_in, args.nhead, args.hidden, args.e_drop, args.num_layers)
-        self.decoder = TransformerDecoder( args.e_in, args.nhead, args.hidden, args.d_drop, args.num_layers)
+        self.encoder = TransformerEncoder( args.e_in, args.nhead, args.ffn_dim, args.e_drop, args.num_layers)
+        self.decoder = TransformerDecoder( args.e_in, args.nhead, args.ffn_dim, args.d_drop, args.num_layers)
         self.postnet = TextPostnet(args.hidden, args.t_post_drop)
 
     def generate_square_subsequent_mask(sz):

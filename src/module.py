@@ -272,9 +272,9 @@ class TransformerEncoder(nn.Module):
         return memory_out.transpose(0, 1)
 
 class TransformerDecoder(nn.Module):
-    def __init__(self, ninp, nhead, nhid, dropout, nlayers):
+    def __init__(self, ninp, nhead, ffn_dim, dropout, nlayers):
         super(TransformerDecoder, self).__init__()
-        decoder_layer = TransformerDecoderLayer(ninp, nhead, nhid, dropout)
+        decoder_layer = TransformerDecoderLayer(ninp, nhead, ffn_dim, dropout)
         self.transformer_decoder = TransformerDecoder(decoder_layer, nlayers)
 
     def forward(self, tgt, memory, tgt_mask=None, memory_mask=None, tgt_key_padding_mask=None, memory_key_padding_mask=None):

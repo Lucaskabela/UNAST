@@ -413,8 +413,8 @@ def initialize_model(args):
         text_m = TextRNN(args)
         speech_m = SpeechRNN(args)
     elif args.model_type == 'transformer':
-        # TODO: Fill it in
-        pass
+        text_m = TextTransformer(args)
+        speech_m = SpeechTransformer(args)
 
     if args.use_discriminator:
         # TODO: Fill it in
