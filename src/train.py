@@ -25,7 +25,7 @@ def adjust_learning_rate(optimizer, step_num, warmup_step=4000):
     lr = hp.lr * warmup_step**0.5 * min(step_num * warmup_step**-1.5, step_num**-0.5)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
-        
+
 class BatchGetter():
     def __init__(self, args, supervised_dataset, unsupervised_dataset, full_dataset):
         self.batch_size = args.batch_size
@@ -118,10 +118,10 @@ def autoencoder_step(model, batch):
     gold_char, gold_mel, gold_stop = y
 
     text_pred = model.text_ae(text, text_len).permute(0, 2, 1)
-    pred, stop_pred = model.speech_ae(mel, mel_len)
+    pre_pred, post_pred, stop_pred = model.speech_ae(mel, mel_len)
 
     # Wait to move these to device until here because memory concerns!
-    s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred,  mel_len, stop_pred)
+    s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), post_pred,  mel_len, stop_pred) + speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred,  mel_len, stop_pred)
     t_ae_loss = text_loss(gold_char.to(DEVICE), text_pred)
     return t_ae_loss, s_ae_loss
 
@@ -130,11 +130,11 @@ def supervised_step(model, batch):
     text, mel, text_len, mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
-    pred, stop_pred = model.tts(text, text_len, mel, mel_len)
+    pre_pred, post_pred, stop_pred = model.tts(text, text_len, mel, mel_len)
     mel_aug = specaugment(mel, mel_len)
     text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
 
-    tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len, stop_pred)
+    tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), post_pred, mel_len, stop_pred) + speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, mel_len, stop_pred)
     asr_loss = text_loss(gold_char.to(DEVICE), text_pred)
     return asr_loss, tts_loss
 
@@ -145,8 +145,8 @@ def crossmodel_step(model, batch):
     gold_char, gold_mel, gold_stop = y
 
     # Do speech!
-    pred, stop_pred = model.cm_speech_in(mel, mel_len)
-    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len, stop_pred)
+    pre_pred, post_pred, stop_pred = model.cm_speech_in(mel, mel_len)
+    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), post_pred, mel_len, stop_pred) + speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, mel_len, stop_pred)
 
     # Now do text!
     text_pred = model.cm_text_in(text, text_len).permute(0, 2, 1)
