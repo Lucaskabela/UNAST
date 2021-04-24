@@ -224,6 +224,7 @@ class SpeechTransformer(AutoEncoderNet):
         input_mask, input_pad_mask = masks
 
         # Need to adjust tgt with "go" padding:
+        # Variable
         sos = torch.zeros((tgt.shape[0], 1, self.postnet.num_mels), device=enc_outputs.device)
         tgt_input = torch.cat([sos, tgt[:, :-1, :]], dim=1)
 
