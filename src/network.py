@@ -213,10 +213,11 @@ class SpeechTransformer(AutoEncoderNet):
         # Maybe this is a bit overkil...
         pad_mask = sent_lens_to_mask(stop_lens, outputs.shape[1] - 1)
         res, res_stop = (outputs + self.postprocess(outputs)), stops[:, 1:]
+        pre_res = outputs[:, 1:, :] * pad_mask.unsqueeze(-1)
         res = res[:, 1:, :]
         res = res * pad_mask.unsqueeze(-1)
         res_stop = res_stop * pad_mask
-        return res, res_stop, stop_lens
+        return pre_res, res_stop, stop_lens
 
     def decode_sequence(self, tgt, tgt_lens, enc_outputs, masks, teacher_ratio=1):
         # No use for teacher ratio here...
@@ -232,7 +233,7 @@ class SpeechTransformer(AutoEncoderNet):
                                         tgt_pad_mask, input_pad_mask)
 
         (dec_out, stop_pred)  = self.postnet.mel_and_stop(outs)
-        return dec_out + self.postprocess(dec_out), stop_pred.squeeze(2)
+        return dec_out, dec_out + self.postprocess(dec_out), stop_pred.squeeze(2)
 
     def forward(self, mel, mel_len, noise_in=False, teacher_ratio=1):
         enc_outputs, masks = self.encode(mel, mel_len, noise_in)
