@@ -20,8 +20,12 @@ from collections import defaultdict
 from data import sequence_to_text
 import math
 
-# DEVICE, TEACHER is only global variable
-
+# DEVICE is only global variable
+def adjust_learning_rate(optimizer, step_num, warmup_step=4000):
+    lr = hp.lr * warmup_step**0.5 * min(step_num * warmup_step**-1.5, step_num**-0.5)
+    for param_group in optimizer.param_groups:
+        param_group['lr'] = lr
+        
 class BatchGetter():
     def __init__(self, args, supervised_dataset, unsupervised_dataset, full_dataset):
         self.batch_size = args.batch_size

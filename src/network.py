@@ -166,7 +166,7 @@ class SpeechTransformer(AutoEncoderNet):
         self.postnet = SpeechPostnet(args.num_mels, args.hidden, p=args.s_post_drop)
 
     def preprocess(self, input_, input_lens, enc=True):
-        input_mask, input_pad_mask = create_mask(input_, input_lens, enc=True)
+        input_mask, input_pad_mask = create_mask(input_, input_lens, enc=enc)
         pre_in =  self.prenet(input_)
         return self.pos_emb(pre_in), (input_mask, input_pad_mask)
 
@@ -178,8 +178,9 @@ class SpeechTransformer(AutoEncoderNet):
         return enc_outputs, (input_mask, input_pad_mask)
 
     def decode(self, tgt, tgt_lens, enc_outputs, enc_mask):
-        embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt, tgt_lens, enc=False)
-        out = self.decoder(embedded_tgt, enc_outputs, tgt_mask, None, tgt_pad_mask, enc_mask)
+        tgt_mask = generate_square_subsequent_mask(tgt.shape(1))
+        embedded_tgt = self.pos_emb(self.prenet(tgt))
+        out = self.decoder(embedded_tgt, enc_outputs, tgt_mask)
         return self.postnet.mel_and_stop(out[:, -1, :].unsqueeze(1))
 
     def postprocess(self, out):
@@ -187,7 +188,7 @@ class SpeechTransformer(AutoEncoderNet):
 
     def infer_sequence(self, memory, masks, max_len=815):
         input_mask, input_pad_mask = masks
-        batch_size = enc_output.shape[0]
+        batch_size = memory.shape[0]
         outputs = torch.zeros((batch_size, 1, self.postnet.num_mels), device=memory.device)
         stop_lens = torch.full((batch_size,), max_len, device=memory.device)
         stops = torch.zeros((batch_size, 1), device=memory.device)
@@ -382,7 +383,7 @@ class TextTransformer(AutoEncoderNet):
         self.postnet = TextPostnet(args.hidden, args.t_post_drop)
 
     def preprocess(self, input_, input_lens, enc=True, noise_in=False):
-        input_mask, input_pad_mask = create_mask(input_, input_lens, enc=True)
+        input_mask, input_pad_mask = create_mask(input_, input_lens, enc=enc)
         embedded_phonemes = self.prenet.emb_dropout(self.prenet.embed(input_))
         if noise_in:
             embedded_phonemes = noise_fn(embedded_phonemes)
@@ -396,8 +397,9 @@ class TextTransformer(AutoEncoderNet):
         return enc_outputs, (input_mask, input_pad_mask)
 
     def decode(self, tgt, tgt_lens, enc_outputs, enc_mask):
-        embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt, tgt_lens, enc=False)
-        out = self.decoder(embedded_tgt, enc_outputs, tgt_mask, None, tgt_pad_mask, enc_mask)
+        tgt_mask = generate_square_subsequent_mask(tgt.shape(1))
+        embedded_tgt = self.pos_emb(self.prenet(tgt))
+        out = self.decoder(embedded_tgt, enc_outputs, tgt_mask)
         return self.postprocess(out[:, -1, :].unsqueeze(1))
 
     def postprocess(self, out):
