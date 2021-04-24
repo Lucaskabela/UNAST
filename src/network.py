@@ -168,7 +168,7 @@ class SpeechTransformer(AutoEncoderNet):
     def preprocess(self, input_, input_lens, enc=True):
         input_mask, input_pad_mask = create_mask(input_, input_lens, enc=True)
         pre_in =  self.prenet(input_)
-        return self.pos_emb(pre_in) (input_mask, input_pad_mask)
+        return self.pos_emb(pre_in), (input_mask, input_pad_mask)
 
     def encode(self, input_, input_lens, noise_in=False):
         if noise_in:
@@ -382,11 +382,11 @@ class TextTransformer(AutoEncoderNet):
 
     def preprocess(self, input_, input_lens, enc=True, noise_in=False):
         input_mask, input_pad_mask = create_mask(input_, input_lens, enc=True)
-        embedded_phonemes = self.prenet.emb_dropout(self.prenet.embed(text))
+        embedded_phonemes = self.prenet.emb_dropout(self.prenet.embed(input_))
         if noise_in:
             embedded_phonemes = noise_fn(embedded_phonemes)
         pre_in = self.prenet.forward_fcn(embedded_phonemes)
-        return self.pos_emb(pre_in) (input_mask, input_pad_mask)
+        return self.pos_emb(pre_in), (input_mask, input_pad_mask)
 
     def encode(self, input_, input_lens, noise_in=False):
         embedded_input, (input_mask, input_pad_mask) = self.preprocess(input_, 
