@@ -21,8 +21,8 @@ from data import sequence_to_text
 import math
 
 # DEVICE is only global variable
-def adjust_learning_rate(optimizer, step_num, warmup_step=4000):
-    lr = hp.lr * warmup_step**0.5 * min(step_num * warmup_step**-1.5, step_num**-0.5)
+def adjust_learning_rate(optimizer, e_in, step_num, warmup_step=4000):
+    lr = e_in**-0.5 * min(step_num * warmup_step**-1.5, step_num**-0.5)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
@@ -93,14 +93,21 @@ def process_batch(batch):
 
 
 #####----- LOSS FUNCTIONS -----#####
+
+# Masked MSE LOSS
+def masked_mse(gold_mel, pred_mel, mel_mask):
+    diff2 = (torch.flatten(gold_mel) - torch.flatten(pred_mel)) ** 2.0 * torch.flatten(mel_mask)
+    result = torch.sum(diff2) / torch.sum(mel_mask)
+    return result
+
 # TODO: add weights for the losses in args?
 def text_loss(gold_char, text_pred):
     return F.cross_entropy(text_pred, gold_char, ignore_index=PAD_IDX)
 
 def speech_loss(gold_mel, stop_label, pred_mel, mel_len, stop_pred):
     # Apply length mask to pred_mel!
-    pred_mel = pred_mel * sent_lens_to_mask(mel_len, pred_mel.shape[1]).unsqueeze(-1)
-    pred_loss = F.mse_loss(pred_mel, gold_mel)
+    mel_mask = sent_lens_to_mask(mel_len, pred_mel.shape[1]).unsqueeze(-1).repeat(1, 1, pred_mel.shape[2])
+    pred_loss = masked_mse(gold_mel, pred_mel, mel_mask)
     stop_loss = F.binary_cross_entropy_with_logits(stop_pred, stop_label)
     return pred_loss + stop_loss
 
@@ -396,20 +403,22 @@ def train(args):
     print("Training model with {} parameters".format(model.num_params()))
     per, eval_losses = evaluate(model, valid_dataloader)
     log_loss_metrics(eval_losses, -1, eval=True)
+
     accum_steps = args.ae_steps + args.cm_steps + args.sp_steps
+    # one step is doing all 4 training tasks
+    if args.epoch_steps >= 0:
+        epoch_steps = args.epoch_steps
+    else:
+        # Define an epoch to be one pass through the discriminator's train
+        # dataset
+        # This makes it so the total number of steps is the same regardless # of whether we train the discriminator or not
+        total_batches_full_dataset = math.ceil(len(full_train_dataset) / args.batch_size)
+        epoch_steps = math.ceil(total_batches_full_dataset / args.d_steps)
+    total_step = s_epoch * epoch_steps
+
     for epoch in range(s_epoch, args.epochs):
         model.train()
         losses = defaultdict(list)
-
-        # one step is doing all 4 training tasks
-        if args.epoch_steps >= 0:
-            epoch_steps = args.epoch_steps
-        else:
-            # Define an epoch to be one pass through the discriminator's train
-            # dataset
-            # This makes it so the total number of steps is the same regardless # of whether we train the discriminator or not
-            total_batches_full_dataset = math.ceil(len(full_train_dataset) / args.batch_size)
-            epoch_steps = math.ceil(total_batches_full_dataset / args.d_steps)
 
         bar = tqdm(range(0, epoch_steps))
         bar.set_description("Epoch {}".format(epoch))
@@ -448,11 +457,15 @@ def train(args):
                 optimizer_step(model, optimizer, args)
 
 
+            if args.model_type == "transformer":
+                adjust_learning_rate(optimizer, args.e_in, total_step + 1)
+        if args.model_type == "rnn":
+            sched.step()
+
         # Eval and save
         per, eval_losses = evaluate(model, valid_dataloader)
         log_loss_metrics(losses, epoch)
         log_loss_metrics(eval_losses, epoch, eval=True)
-        sched.step()
         model.teacher.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
         save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
@@ -472,7 +485,6 @@ def log_loss_metrics(losses, epoch, eval=False):
         out_str += "{} loss =  {:0.3f} \t".format(key_, np.mean(loss))
     print(out_str)
 
-    # TODO: Add tensorboard logging ?
 
 def train_text_auto(args):
     ''' Purely for testing purposes'''

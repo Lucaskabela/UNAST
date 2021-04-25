@@ -95,36 +95,38 @@ class UNAST(nn.Module):
         self.teacher = teacher
 
     def text_ae(self, text, text_len, ret_enc_hid=False):
-        return self.text_m.forward(text, text_len, noise_in=True, teacher_ratio=self.teacher.get_val(), ret_enc_hid=ret_enc_hid)
+        return self.text_m.forward(text, text_len, noise_in=True, teacher_ratio=1, ret_enc_hid=ret_enc_hid)
 
     def speech_ae(self, mel, mel_len, ret_enc_hid=False):
-        return self.speech_m.forward(mel, mel_len, noise_in=True, ret_enc_hid=ret_enc_hid, teacher_ratio=self.teacher.get_val())
+        return self.speech_m.forward(mel, mel_len, noise_in=True, ret_enc_hid=ret_enc_hid, teacher_ratio=1)
 
     def cm_text_in(self, text, text_len, ret_enc_hid=False):
-        t_e_o, t_mask = self.text_m.encode(text, text_len)
-        _, post_pred, _, pred_lens = self.speech_m.infer_sequence(t_e_o, t_mask)
-        cm_s_e_o, cm_mask = self.speech_m.encode(post_pred, pred_lens)
+        with torch.no_grad():
+            t_e_o, t_mask = self.text_m.encode(text, text_len)
+            _, post_pred, _, pred_lens = self.speech_m.infer_sequence(t_e_o, t_mask)
+        cm_s_e_o, cm_mask = self.speech_m.encode(post_pred.detach(), pred_lens.detach())
         text_pred = self.text_m.decode_sequence(text, text_len, cm_s_e_o, cm_mask,
-            teacher_ratio=self.teacher.get_val())
+            teacher_ratio=1)
         if ret_enc_hid:
-            return text_pred, t_e_o[0], cm_s_e_o[0]
+            return text_pred, cm_s_e_o[0]
         return text_pred
 
     def cm_speech_in(self, mel, mel_len, ret_enc_hid=False):
-        s_e_o, s_mask = self.speech_m.encode(mel, mel_len)
-        text_pred, text_pred_len = self.text_m.infer_sequence(s_e_o, s_mask)
-        cm_t_e_o, cm_t_masks = self.text_m.encode(text_pred, text_pred_len)
+        with torch.no_grad():
+            s_e_o, s_mask = self.speech_m.encode(mel, mel_len)
+            text_pred, text_pred_len = self.text_m.infer_sequence(s_e_o, s_mask)
+        cm_t_e_o, cm_t_masks = self.text_m.encode(text_pred.detach(), text_pred_len.detach())
         pre_pred, post_pred, stop_pred = self.speech_m.decode_sequence(mel, mel_len, cm_t_e_o,
-            cm_t_masks, teacher_ratio=self.teacher.get_val())
+            cm_t_masks, teacher_ratio=1)
         if ret_enc_hid:
-            return pre_pred, post_pred, stop_pred, s_e_o[0], cm_t_e_o[0]
+            return pre_pred, post_pred, stop_pred, cm_t_e_o[0]
         return pre_pred, post_pred, stop_pred
 
     def tts(self, text, text_len, mel, mel_len, infer=False, ret_enc_hid=False):
         t_e_o, t_masks = self.text_m.encode(text, text_len)
         if not infer:
             pre_pred, post_pred, stop_pred = self.speech_m.decode_sequence(mel, mel_len, t_e_o,
-                t_masks, teacher_ratio=self.teacher.get_val())
+                t_masks, teacher_ratio=1)
         else:
             pre_pred, post_pred, stop_pred, _ = self.speech_m.infer_sequence(t_e_o, t_masks)
         if ret_enc_hid:
@@ -135,7 +137,7 @@ class UNAST(nn.Module):
         s_e_o, s_masks = self.speech_m.encode(mel, mel_len)
         if not infer:
             text_pred = self.text_m.decode_sequence(text, text_len, s_e_o,
-                s_masks, teacher_ratio=self.teacher.get_val())
+                s_masks, teacher_ratio=1)
         else:
             text_pred = self.text_m.infer_sequence(s_e_o, s_masks)
         if ret_enc_hid:
@@ -237,6 +239,7 @@ class SpeechTransformer(AutoEncoderNet):
         input_mask, input_pad_mask = masks
 
         # Need to adjust tgt with "go" padding:
+        # Variable
         sos = torch.zeros((tgt.shape[0], 1, self.postnet.num_mels), device=enc_outputs.device)
         tgt_input = torch.cat([sos, tgt[:, :-1, :]], dim=1)
 
@@ -439,9 +442,9 @@ class TextTransformer(AutoEncoderNet):
             outputs = torch.cat([outputs, choice], dim=1)
 
             # set stop_lens here!
+            i +=1
             stop_mask = (choice.squeeze() == EOS_IDX).logical_and(stop_lens == max_len)
             stop_lens[stop_mask] = i
-            i +=1
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
 
         # Maybe this is a bit overkil...
@@ -571,10 +574,9 @@ class TextRNN(AutoEncoderNet):
             # set stop_lens here!
 
             # double check this!
+            i += 1
             stop_mask = (choice.squeeze() == EOS_IDX).logical_and(stop_lens == max_len)
             stop_lens[stop_mask] = i
-            i += 1
-
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
 
         # Maybe this is a bit overkil...
