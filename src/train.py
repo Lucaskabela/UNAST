@@ -21,8 +21,8 @@ from data import sequence_to_text
 import math
 
 # DEVICE is only global variable
-def adjust_learning_rate(optimizer, base_lr, step_num, warmup_step=4000):
-    lr = base_lr * warmup_step**0.5 * min(step_num * warmup_step**-1.5, step_num**-0.5)
+def adjust_learning_rate(optimizer, e_in, step_num, warmup_step=4000):
+    lr = e_in**-0.5 * min(step_num * warmup_step**-1.5, step_num**-0.5)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
         
@@ -302,7 +302,7 @@ def train(args):
                     # TODO: Train discriminator
 
         if args.model_type == "transformer":
-            adjust_learning_rate(optimizer, args.lr, total_step)
+            adjust_learning_rate(optimizer, args.e_in, total_step)
         else:
             sched.step()
 
