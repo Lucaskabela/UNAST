@@ -20,6 +20,7 @@ import numpy as np
 from collections import defaultdict
 from data import sequence_to_text
 import math
+import sys
 
 # DEVICE, WRITER are the only global variable
 def adjust_learning_rate(optimizer, e_in, step_num, warmup_step=4000):
@@ -29,7 +30,7 @@ def adjust_learning_rate(optimizer, e_in, step_num, warmup_step=4000):
 
 class BatchGetter():
     def __init__(self, args, supervised_dataset, unsupervised_dataset, full_dataset):
-        self.batch_size = args.batch_size
+        self.batch_size = args.train_batch_size
         self.num_workers = args.num_workers
 
         self.supervised_dataloader = DataLoader(supervised_dataset,
@@ -166,6 +167,37 @@ def discriminator_target(output, target_type, smoothing=0.1):
     target[:,] = smoothed_target_label
     return target
 
+def check_nan_loss(model, loss, loss_type, text_gold, text_pred, speech_gold, speech_pred, stop_gold, stop_pred):
+    if torch.isnan(loss):
+        print(f"Discovered NaN loss on {loss_type}!")
+        if text_gold is not None:
+            print("Text gold:")
+            for idx in range(text_gold.shape[0]):
+                print(f"{idx}. {sequence_to_text(text_gold[idx].detach().cpu().numpy())}")
+        if text_pred is not None:
+            print("Text pred:")
+            for idx in range(text_pred.shape[0]):
+                print(f"{idx}. {sequence_to_text(text_pred[idx].detach().cpu().numpy())}")
+        torch.set_printoptions(edgeitems=1000, profile="full")
+        if speech_gold is not None:
+            print("Speech gold:")
+            for idx in range(speech_gold.shape[0]):
+                print(idx)
+                print(speech_gold[idx])
+        if speech_pred is not None:
+            print("Speech pred:")
+            for idx in range(speech_pred.shape[0]):
+                print(idx)
+                print(speech_pred[idx])
+        if stop_gold is not None:
+            print("Stop gold:")
+            print(stop_gold)
+        if stop_pred is not None:
+            print("Stop pred:")
+            print(stop_pred)
+        print("=============== MODEL ===============")
+        print(model)
+        sys.exit("Loss is NaN")
 
 #####----- Use these to run a task on a batch ----#####
 def autoencoder_step(model, batch, args, use_dis_loss=False):
@@ -189,6 +221,14 @@ def autoencoder_step(model, batch, args, use_dis_loss=False):
 
     s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
     t_ae_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
+
+    # Check loss is not NaN
+    check_nan_loss(model, t_ae_loss, "ae_text_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+    check_nan_loss(model, s_ae_loss, "ae_speech_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+    if use_dis_loss:
+        check_nan_loss(model, t_d_loss, "ae_text_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+        check_nan_loss(model, s_d_loss, "ae_speech_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+
     if use_dis_loss:
         return t_ae_loss, s_ae_loss, t_d_loss, s_d_loss
     return t_ae_loss, s_ae_loss
@@ -212,6 +252,14 @@ def supervised_step(model, batch, args, use_dis_loss=False):
 
     tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
     asr_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
+
+    # Check loss is not NaN
+    check_nan_loss(model, asr_loss, "sp_asr_loss", None, text_pred, mel_aug, None, None, None)
+    check_nan_loss(model, tts_loss, "sp_tts_loss", text, None, None, post_pred, None, stop_pred)
+    if use_dis_loss:
+        check_nan_loss(model, t_d_loss, "sp_text_dis_loss", None, text_pred, mel_aug, None, None, None)
+        check_nan_loss(model, s_d_loss, "sp_speech_dis_loss", text, None, None, post_pred, None, stop_pred)
+
     if use_dis_loss:
         return asr_loss, tts_loss, t_d_loss, s_d_loss
     return asr_loss, tts_loss
@@ -238,6 +286,13 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
     else:
         text_pred = model.cm_text_in(text, text_len).permute(0, 2, 1)
     t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
+
+    # Check loss is not NaN
+    check_nan_loss(model, t_cm_loss, "cm_text_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+    check_nan_loss(model, s_cm_loss, "cm_speech_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+    if use_dis_loss:
+        check_nan_loss(model, cm_t_d_loss, "cm_text_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+        check_nan_loss(model, cm_s_d_loss, "cm_speech_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
 
     if use_dis_loss:
         return t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss
@@ -277,6 +332,11 @@ def discriminator_step(model, batch):
     else:
         s_hid = s_enc_out
     s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'speech')
+
+    # Check loss is not NaN
+    check_nan_loss(model, t_d_loss, "dis_text_loss", text, None, mel, None, None, None)
+    check_nan_loss(model, s_d_loss, "dis_speech_loss", text, None, mel, None, None, None)
+
     return t_d_loss, s_d_loss
 
 
@@ -447,7 +507,7 @@ def train(args):
     supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset = \
         initialize_datasets(args)
     valid_dataloader = DataLoader(val_dataset,
-            batch_size=args.batch_size, shuffle=True,
+            batch_size=args.eval_batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
             num_workers=args.num_workers, pin_memory=True)
     batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
@@ -548,12 +608,14 @@ def train(args):
         log_loss_metrics(eval_losses, epoch, eval=True)
 
         # Log eval example to tensorboard
-        step = (epoch + 1)*epoch_steps*max_obj_steps - 1
-        idx = np.random.randint(0, len(val_dataset))
-        ex = val_dataset[idx]
-        log_tb_example(model, ex, step, "eval")
-        for key_, loss in eval_losses.items():
-            WRITER.add_scalar(f"eval/{key_}_loss", np.mean(loss), step)
+        if WRITER:
+            step = (epoch + 1)*epoch_steps*max_obj_steps - 1
+            idx = np.random.randint(0, len(val_dataset))
+            ex = val_dataset[idx]
+            log_tb_example(model, ex, step, "eval")
+            for key_, loss in eval_losses.items():
+                WRITER.add_scalar(f"eval/{key_}_loss", np.mean(loss), step)
+            WRITER.add_scalar(f"eval/per", per, step)
 
         model.teacher.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
@@ -600,7 +662,7 @@ def train_text_auto(args):
     #NOTE: Subset for prototyping
     # dataset = torch.utils.data.Subset(dataset, range(1000))
 
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+    dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
     train_log, valid_log = None, None
     model = TextRNN(args).to(DEVICE)
     print("Sent model to", DEVICE)
@@ -639,7 +701,7 @@ def train_speech_auto(args):
     dataset = get_dataset('unlabeled_train.csv')
     #NOTE: Subset for prototyping
     # dataset = torch.utils.data.Subset(dataset, range(1000))
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+    dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
     train_log, valid_log = None, None
     model = SpeechRNN(args).to(DEVICE)
     print("Sent model to", DEVICE)
@@ -729,6 +791,7 @@ if __name__ == "__main__":
     global DEVICE
     global WRITER
     DEVICE = init_device(args)
+    print(f"Device: {DEVICE}")
 
     if args.tb_log_path:
         WRITER = SummaryWriter(log_dir=args.tb_log_path, flush_secs=60)
