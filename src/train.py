@@ -21,8 +21,8 @@ from data import sequence_to_text
 import math
 
 # DEVICE is only global variable
-def adjust_learning_rate(optimizer, step_num, warmup_step=4000):
-    lr = hp.lr * warmup_step**0.5 * min(step_num * warmup_step**-1.5, step_num**-0.5)
+def adjust_learning_rate(optimizer, base_lr, step_num, warmup_step=4000):
+    lr = base_lr * warmup_step**0.5 * min(step_num * warmup_step**-1.5, step_num**-0.5)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
         
@@ -258,20 +258,22 @@ def train(args):
     print("Training model with {} parameters".format(model.num_params()))
     per, eval_losses = evaluate(model, valid_dataloader)
     log_loss_metrics(eval_losses, -1, eval=True)
+
     accum_steps = args.ae_steps + args.cm_steps + args.sp_steps
+    # one step is doing all 4 training tasks
+    if args.epoch_steps >= 0:
+        epoch_steps = args.epoch_steps
+    else:
+        # Define an epoch to be one pass through the discriminator's train
+        # dataset
+        # This makes it so the total number of steps is the same regardless # of whether we train the discriminator or not
+        total_batches_full_dataset = math.ceil(len(full_train_dataset) / args.batch_size)
+        epoch_steps = math.ceil(total_batches_full_dataset / args.d_steps)
+    total_step = s_epoch * epoch_steps
+
     for epoch in range(s_epoch, args.epochs):
         model.train()
         losses = defaultdict(list)
-
-        # one step is doing all 4 training tasks
-        if args.epoch_steps >= 0:
-            epoch_steps = args.epoch_steps
-        else:
-            # Define an epoch to be one pass through the discriminator's train
-            # dataset
-            # This makes it so the total number of steps is the same regardless # of whether we train the discriminator or not
-            total_batches_full_dataset = math.ceil(len(full_train_dataset) / args.batch_size)
-            epoch_steps = math.ceil(total_batches_full_dataset / args.d_steps)
 
         bar = tqdm(range(0, epoch_steps))
         bar.set_description("Epoch {}".format(epoch))
@@ -299,11 +301,15 @@ def train(args):
                     batch = batch_getter.get_discriminator_batch()
                     # TODO: Train discriminator
 
+        if args.model_type == "transformer":
+            adjust_learning_rate(optimizer, args.lr, total_step)
+        else:
+            sched.step()
+
         # Eval and save
         per, eval_losses = evaluate(model, valid_dataloader)
         log_loss_metrics(losses, epoch)
         log_loss_metrics(eval_losses, epoch, eval=True)
-        sched.step()
         model.teacher.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
         save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
@@ -323,7 +329,6 @@ def log_loss_metrics(losses, epoch, eval=False):
         out_str += "{} loss =  {:0.3f} \t".format(key_, np.mean(loss))
     print(out_str)
 
-    # TODO: Add tensorboard logging ?
 
 def train_text_auto(args):
     ''' Purely for testing purposes'''
