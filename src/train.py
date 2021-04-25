@@ -106,8 +106,8 @@ def text_loss(gold_char, text_pred):
 
 def speech_loss(gold_mel, stop_label, pred_mel, mel_len, stop_pred):
     # Apply length mask to pred_mel!
-    mel_mask = sent_lens_to_mask(mel_len, pred_mel.shape[1]).unsqueeze(-1)
-    pred_loss = masked_mse(gold_mel, pred_mel, gold_mel, mel_mask)
+    mel_mask = sent_lens_to_mask(mel_len, pred_mel.shape[1]).unsqueeze(-1).repeat(1, 1, pred_mel.shape[2])
+    pred_loss = masked_mse(gold_mel, pred_mel, mel_mask)
     stop_loss = F.binary_cross_entropy_with_logits(stop_pred, stop_label)
     return pred_loss + stop_loss
 
