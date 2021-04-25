@@ -104,12 +104,13 @@ def masked_mse(gold_mel, pred_mel, mel_mask):
 def text_loss(gold_char, text_pred):
     return F.cross_entropy(text_pred, gold_char, ignore_index=PAD_IDX)
 
-def speech_loss(gold_mel, stop_label, pred_mel, mel_len, stop_pred):
+def speech_loss(gold_mel, stop_label, pred_mel, post_pred_mel, mel_len, stop_pred):
     # Apply length mask to pred_mel!
     mel_mask = sent_lens_to_mask(mel_len, pred_mel.shape[1]).unsqueeze(-1).repeat(1, 1, pred_mel.shape[2])
     pred_loss = masked_mse(gold_mel, pred_mel, mel_mask)
+    post_pred_loss = masked_mse(gold_mel, post_pred_mel, mel_mask)
     stop_loss = F.binary_cross_entropy_with_logits(stop_pred, stop_label)
-    return pred_loss + stop_loss
+    return pred_loss + post_pred_loss + stop_loss
 
 
 def cross_entropy(input, target, size_average=True):
@@ -180,7 +181,7 @@ def autoencoder_step(model, batch, use_dis_loss=False):
         text_pred = model.text_ae(text, text_len).permute(0, 2, 1)
         pre_pred, post_pred, stop_pred = model.speech_ae(mel, mel_len)
 
-    s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), post_pred,  mel_len, stop_pred) + speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred,  mel_len, stop_pred)
+    s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred)
     t_ae_loss = text_loss(gold_char.to(DEVICE), text_pred)
     if use_dis_loss:
         return t_ae_loss, s_ae_loss, t_d_loss, s_d_loss
@@ -203,7 +204,7 @@ def supervised_step(model, batch, use_dis_loss=False):
         pre_pred, post_pred, stop_pred = model.tts(text, text_len, mel, mel_len)
         text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
 
-    tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), post_pred, mel_len, stop_pred) + speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, mel_len, stop_pred)
+    tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred)
     asr_loss = text_loss(gold_char.to(DEVICE), text_pred)
     if use_dis_loss:
         return asr_loss, tts_loss, t_d_loss, s_d_loss
@@ -221,7 +222,7 @@ def crossmodel_step(model, batch, use_dis_loss=False):
         cm_t_d_loss = discriminator_hidden_to_loss(model, cm_t_hid, 'speech')
     else:
         pre_pred, post_pred, stop_pred = model.cm_speech_in(mel, mel_len)
-    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), post_pred, mel_len, stop_pred) + speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, mel_len, stop_pred)
+    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred)
 
     # Now do text!
     if use_dis_loss:
