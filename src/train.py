@@ -173,10 +173,10 @@ def autoencoder_step(model, batch, use_dis_loss=False):
     if use_dis_loss:
         text_pred, t_hid = model.text_ae(text, text_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
-        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech')
+        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech', freeze_discriminator=True)
 
         pre_pred, post_pred, stop_pred, s_hid = model.speech_ae(mel, mel_len, ret_enc_hid=use_dis_loss)
-        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text')
+        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text', freeze_discriminator=True)
     else:
         text_pred = model.text_ae(text, text_len).permute(0, 2, 1)
         pre_pred, post_pred, stop_pred = model.speech_ae(mel, mel_len)
@@ -195,11 +195,11 @@ def supervised_step(model, batch, use_dis_loss=False):
     mel_aug = specaugment(mel, mel_len)
     if use_dis_loss:
         pre_pred, post_pred, stop_pred, t_hid = model.tts(text, text_len, mel, mel_len, ret_enc_hid=use_dis_loss)
-        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech')
+        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech', freeze_discriminator=True)
 
         text_pred, s_hid = model.asr(text, text_len, mel_aug, mel_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
-        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text')
+        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text', freeze_discriminator=True)
     else:
         pre_pred, post_pred, stop_pred = model.tts(text, text_len, mel, mel_len)
         text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
@@ -219,7 +219,7 @@ def crossmodel_step(model, batch, use_dis_loss=False):
     # Do speech!
     if use_dis_loss:
         pre_pred, post_pred, stop_pred, cm_t_hid = model.cm_speech_in(mel, mel_len, ret_enc_hid=use_dis_loss)
-        cm_t_d_loss = discriminator_hidden_to_loss(model, cm_t_hid, 'speech')
+        cm_t_d_loss = discriminator_hidden_to_loss(model, cm_t_hid, 'speech', freeze_discriminator=True)
     else:
         pre_pred, post_pred, stop_pred = model.cm_speech_in(mel, mel_len)
     s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred)
@@ -228,7 +228,7 @@ def crossmodel_step(model, batch, use_dis_loss=False):
     if use_dis_loss:
         text_pred, cm_s_hid = model.cm_text_in(text, text_len, ret_enc_hid=args.use_discriminator)
         text_pred = text_pred.permute(0, 2, 1)
-        cm_s_d_loss = discriminator_hidden_to_loss(model, cm_s_hid, 'text')
+        cm_s_d_loss = discriminator_hidden_to_loss(model, cm_s_hid, 'text', freeze_discriminator=True)
     else:
         text_pred = model.cm_text_in(text, text_len).permute(0, 2, 1)
     t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred)
@@ -237,9 +237,13 @@ def crossmodel_step(model, batch, use_dis_loss=False):
         return t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss
     return t_cm_loss, s_cm_loss
 
-def discriminator_hidden_to_loss(model, hid, target_type):
+def discriminator_hidden_to_loss(model, hid, target_type, freeze_discriminator= False):
     d_in = hid[-1]
-    d_out = model.discriminator(d_in)
+    if freeze_discriminator:
+        with torch.no_grad():
+            d_out = model.discriminator(d_in)
+    else:
+        d_out = model.discriminator(d_in)
     target = discriminator_target(d_out, target_type)
     d_loss = discriminator_loss(d_out, target)
     return d_loss
@@ -249,18 +253,20 @@ def discriminator_step(model, batch):
     text, mel, text_len, mel_len = x
 
     # text
-    t_enc_out, _ = model.text_m.encode(text, text_len)
+    with torch.no_grad():
+        t_enc_out, _ = model.text_m.encode(text, text_len)
     # quick check to determine between rnn and transformer
     # eventually should be built into the RNN and Transformer Encoder classes
-    if len(t_enc_out == 2):
+    if len(t_enc_out) == 2:
         t_hid = t_enc_out[0]
     else:
         t_hid = t_enc_out
     t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'text')
 
     # speech
-    s_enc_out, _ = model.speech_m.encode(mel, mel_len)
-    if len(s_enc_out == 2):
+    with torch.no_grad():
+        s_enc_out, _ = model.speech_m.encode(mel, mel_len)
+    if len(s_enc_out) == 2:
         s_hid = s_enc_out[0]
     else:
         s_hid = s_enc_out
@@ -322,7 +328,7 @@ def train_cm_step(losses, model, batch, accum_steps, use_discriminator):
 
     if use_discriminator:
         t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss = crossmodel_step(model, batch, use_discriminator)
-        loss = s_cm_loss + t_cm_loss + s_d_loss + cm_t_d_loss + t_d_loss + cm_s_d_loss
+        loss = s_cm_loss + t_cm_loss + cm_t_d_loss + cm_s_d_loss
     else:
         t_cm_loss, s_cm_loss = crossmodel_step(model, batch)
         loss = s_cm_loss + t_cm_loss
@@ -430,11 +436,11 @@ def train(args):
         bar = tqdm(range(0, epoch_steps))
         bar.set_description("Epoch {}".format(epoch))
         for _ in bar:
-            if args.use_discriminator:
-                # need to freeze the disciminator first
-                freeze_model_parameters(model.discriminator)
-                unfreeze_model_parameters(model.text_m)
-                unfreeze_model_parameters(model.speech_m)
+            # if args.use_discriminator:
+            #     # need to freeze the disciminator first
+            #     freeze_model_parameters(model.discriminator)
+            #     unfreeze_model_parameters(model.text_m)
+            #     unfreeze_model_parameters(model.speech_m)
 
             # DENOISING AUTO ENCODER
             for _ in range(0, args.ae_steps):
@@ -455,9 +461,9 @@ def train(args):
             optimizer_step(model, optimizer, args)
             # DISCRIMINATOR
             if args.use_discriminator:
-                unfreeze_model_parameters(model.discriminator)
-                freeze_model_parameters(model.text_m)
-                freeze_model_parameters(model.speech_m)
+                # unfreeze_model_parameters(model.discriminator)
+                # freeze_model_parameters(model.text_m)
+                # freeze_model_parameters(model.speech_m)
                 for _ in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
                     train_discriminator_step(losses, model, batch, args.d_steps)
