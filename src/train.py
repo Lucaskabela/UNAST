@@ -479,18 +479,15 @@ def evaluate(model, valid_dataloader):
             x, _ = batch
             text, mel, text_len, mel_len = x
 
-            t_ae_loss, s_ae_pred_loss, s_ae_stop_loss = autoencoder_step(model, batch, args)
-            s_ae_loss = s_ae_pred_loss + s_ae_stop_loss
+            t_ae_loss, s_ae_loss = autoencoder_step(model, batch, args)
             losses['t_ae'].append(t_ae_loss.detach().item())
             losses['s_ae'].append(s_ae_loss.detach().item())
 
-            asr_loss, tts_pred_loss, tts_stop_loss = supervised_step(model, batch, args)
-            tts_loss = tts_pred_loss + tts_stop_loss
+            asr_loss, tts_loss = supervised_step(model, batch, args)
             losses['asr_'].append(asr_loss.detach().item())
             losses['tts_'].append(tts_loss.detach().item())
 
-            t_cm_loss, s_cm_pred_loss, s_cm_stop_loss = crossmodel_step(model, batch, args)
-            s_cm_loss = s_cm_pred_loss + s_cm_stop_loss
+            t_cm_loss, s_cm_loss = crossmodel_step(model, batch, args)
             losses['s_cm'].append(s_cm_loss.detach().item())
             losses['t_cm'].append(t_cm_loss.detach().item())
 

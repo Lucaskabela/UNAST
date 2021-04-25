@@ -227,7 +227,7 @@ class SpeechTransformer(AutoEncoderNet):
             (dec_out, stop_pred) = self.decode(input_, stop_lens, memory, input_pad_mask)
             stops = torch.cat([stops, stop_pred.squeeze(2)], dim=1)
             outputs = torch.cat([outputs, dec_out], dim=1)
-            stop_pred = stop_pred.squeeze()
+            stop_pred = stop_pred.flatten(start_dim=0)
             # set stop_lens here!
             i += 1
 
@@ -243,7 +243,7 @@ class SpeechTransformer(AutoEncoderNet):
         res = res[:, 1:, :]
         res = res * pad_mask.unsqueeze(-1)
         res_stop = res_stop * pad_mask
-        return pre_res, res_stop, stop_lens
+        return pre_res, res, res_stop, stop_lens
 
     def decode_sequence(self, tgt, tgt_lens, enc_outputs, masks, teacher_ratio=1):
         # No use for teacher ratio here...
@@ -457,8 +457,8 @@ class TextTransformer(AutoEncoderNet):
             outputs = torch.cat([outputs, choice], dim=1)
 
             # set stop_lens here!
-            i +=1
-            stop_mask = (choice.squeeze() == EOS_IDX).logical_and(stop_lens == max_len)
+            i += 1
+            stop_mask = (choice.squeeze(1) == EOS_IDX).logical_and(stop_lens == max_len)
             stop_lens[stop_mask] = i
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
 
