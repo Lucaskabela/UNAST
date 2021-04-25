@@ -301,9 +301,9 @@ def train(args):
                     batch = batch_getter.get_discriminator_batch()
                     # TODO: Train discriminator
 
-        if args.model_type == "transformer":
-            adjust_learning_rate(optimizer, args.e_in, total_step)
-        else:
+            if args.model_type == "transformer":
+                adjust_learning_rate(optimizer, args.e_in, total_step + 1)
+        if args.model_type == "rnn":
             sched.step()
 
         # Eval and save
