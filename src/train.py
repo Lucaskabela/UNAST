@@ -93,14 +93,21 @@ def process_batch(batch):
 
 
 #####----- LOSS FUNCTIONS -----#####
+
+# Masked MSE LOSS
+def masked_mse(gold_mel, pred_mel, mel_mask):
+    diff2 = (torch.flatten(gold_mel) - torch.flatten(pred_mel)) ** 2.0 * torch.flatten(mel_mask)
+    result = torch.sum(diff2) / torch.sum(mel_mask)
+    return result
+
 # TODO: add weights for the losses in args?
 def text_loss(gold_char, text_pred):
     return F.cross_entropy(text_pred, gold_char, ignore_index=PAD_IDX)
 
 def speech_loss(gold_mel, stop_label, pred_mel, mel_len, stop_pred):
     # Apply length mask to pred_mel!
-    pred_mel = pred_mel * sent_lens_to_mask(mel_len, pred_mel.shape[1]).unsqueeze(-1)
-    pred_loss = F.mse_loss(pred_mel, gold_mel)
+    mel_mask = sent_lens_to_mask(mel_len, pred_mel.shape[1]).unsqueeze(-1)
+    pred_loss = masked_mse(gold_mel, pred_mel, gold_mel, mel_mask)
     stop_loss = F.binary_cross_entropy_with_logits(stop_pred, stop_label)
     return pred_loss + stop_loss
 
