@@ -217,8 +217,7 @@ def crossmodel_step(model, batch, use_dis_loss=False):
 
     # Do speech!
     if use_dis_loss:
-        pre_pred, post_pred, stop_pred, s_hid, cm_t_hid = model.cm_speech_in(mel, mel_len, ret_enc_hid=use_dis_loss)
-        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text')
+        pre_pred, post_pred, stop_pred, cm_t_hid = model.cm_speech_in(mel, mel_len, ret_enc_hid=use_dis_loss)
         cm_t_d_loss = discriminator_hidden_to_loss(model, cm_t_hid, 'speech')
     else:
         pre_pred, post_pred, stop_pred = model.cm_speech_in(mel, mel_len)
@@ -226,16 +225,15 @@ def crossmodel_step(model, batch, use_dis_loss=False):
 
     # Now do text!
     if use_dis_loss:
-        text_pred, t_hid, cm_s_hid = model.cm_text_in(text, text_len, ret_enc_hid=args.use_discriminator)
+        text_pred, cm_s_hid = model.cm_text_in(text, text_len, ret_enc_hid=args.use_discriminator)
         text_pred = text_pred.permute(0, 2, 1)
-        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech')
         cm_s_d_loss = discriminator_hidden_to_loss(model, cm_s_hid, 'text')
     else:
         text_pred = model.cm_text_in(text, text_len).permute(0, 2, 1)
     t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred)
 
     if use_dis_loss:
-        return t_cm_loss, s_cm_loss, s_d_loss, cm_t_d_loss, t_d_loss, cm_s_d_loss
+        return t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss
     return t_cm_loss, s_cm_loss
 
 def discriminator_hidden_to_loss(model, hid, target_type):
@@ -250,11 +248,21 @@ def discriminator_step(model, batch):
     text, mel, text_len, mel_len = x
 
     # text
-    (t_hid, _), _ = model.text_m.encode(text, text_len)
+    t_enc_out, _ = model.text_m.encode(text, text_len)
+    # quick check to determine between rnn and transformer
+    # eventually should be built into the RNN and Transformer Encoder classes
+    if len(t_enc_out == 2):
+        t_hid = t_enc_out[0]
+    else:
+        t_hid = t_enc_out
     t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'text')
 
     # speech
-    (s_hid, _), _ = model.speech_m.encode(mel, mel_len)
+    s_enc_out, _ = model.speech_m.encode(mel, mel_len)
+    if len(s_enc_out == 2):
+        s_hid = s_enc_out[0]
+    else:
+        s_hid = s_enc_out
     s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'speech')
     return t_d_loss, s_d_loss
 
@@ -312,7 +320,7 @@ def train_cm_step(losses, model, batch, accum_steps, use_discriminator):
     batch = process_batch(batch)
 
     if use_discriminator:
-        t_cm_loss, s_cm_loss, s_d_loss, cm_t_d_loss, t_d_loss, cm_s_d_loss = crossmodel_step(model, batch, use_discriminator)
+        t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss = crossmodel_step(model, batch, use_discriminator)
         loss = s_cm_loss + t_cm_loss + s_d_loss + cm_t_d_loss + t_d_loss + cm_s_d_loss
     else:
         t_cm_loss, s_cm_loss = crossmodel_step(model, batch)
@@ -324,8 +332,6 @@ def train_cm_step(losses, model, batch, accum_steps, use_discriminator):
     losses['s_cm'].append(s_cm_loss.detach().cpu().item())
     losses['t_cm'].append(t_cm_loss.detach().cpu().item())
     if args.use_discriminator:
-        losses['s_cm_d'].append(s_d_loss.detach().cpu().item())
-        losses['t_cm_d'].append(t_d_loss.detach().cpu().item())
         losses['cm_s_cm_d'].append(cm_s_d_loss.detach().cpu().item())
         losses['cm_t_cm_d'].append(cm_t_d_loss.detach().cpu().item())
     return loss
