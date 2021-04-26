@@ -227,7 +227,7 @@ class SpeechTransformer(AutoEncoderNet):
             (dec_out, stop_pred) = self.decode(input_, stop_lens, memory, input_pad_mask)
             stops = torch.cat([stops, stop_pred.squeeze(2)], dim=1)
             outputs = torch.cat([outputs, dec_out], dim=1)
-            stop_pred = stop_pred.flatten(start_dim=0)
+            stop_pred = stop_pred.squeeze(dim=-1).squeeze(dim=-1)
             # set stop_lens here!
             i += 1
 
@@ -321,7 +321,7 @@ class SpeechRNN(AutoEncoderNet):
             (dec_out, stop_pred), hidden_state = self.decode(input_, hidden_state, enc_output, enc_ctxt_mask)
             stops = torch.cat([stops, stop_pred.squeeze(2)], dim=1)
             outputs = torch.cat([outputs, dec_out], dim=1)
-            stop_pred = stop_pred.flatten(start_dim=0)
+            stop_pred = stop_pred.squeeze(dim=-1).squeeze(dim=-1)
             # set stop_lens here!
             i += 1
 
@@ -390,7 +390,7 @@ class SpeechRNN(AutoEncoderNet):
 
     def forward(self, mel, mel_len, noise_in=False, ret_enc_hid=False, teacher_ratio=1):
         encoder_outputs, pad_mask = self.encode(mel, mel_len, noise_in=noise_in)
-        pre_pred, post_pred, stop_pred, stop_lens = self.decode_sequence(mel, mel_len, encoder_outputs, pad_mask, teacher_ratio)
+        pre_pred, post_pred, stop_pred, stop_lens = self.decode_sequence(mel, mel_len, encoder_outputs, pad_mask, teacher_ratio=1)
         if ret_enc_hid:
             return pre_pred, post_pred, stop_pred, encoder_outputs[0]
         return pre_pred, post_pred, stop_pred
@@ -607,7 +607,7 @@ class TextRNN(AutoEncoderNet):
 
     def forward(self, text, text_len, noise_in=False, teacher_ratio=1, ret_enc_hid=False):
         encoder_outputs, pad_mask = self.encode(text, text_len, noise_in=noise_in)
-        pred = self.decode_sequence(text, text_len, encoder_outputs, pad_mask, teacher_ratio)
+        pred = self.decode_sequence(text, text_len, encoder_outputs, pad_mask, teacher_ratio=1)
         if ret_enc_hid:
             return pred, encoder_outputs[0]
         return pred

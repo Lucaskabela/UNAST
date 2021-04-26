@@ -275,7 +275,7 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
 
     # Now do text!
     if use_dis_loss:
-        text_pred, cm_s_hid = model.cm_text_in(text, text_len, ret_enc_hid=args.use_discriminator)
+        text_pred, cm_s_hid = model.cm_text_in(text, text_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
         cm_s_d_loss = discriminator_hidden_to_loss(model, cm_s_hid, 'text', freeze_discriminator=True)
     else:
@@ -830,7 +830,6 @@ def initialize_model(args):
     s_epoch, best = 0, 100
     if args.load_path is not None:
         s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
-        s_epoch = s_epoch + 1
 
     # initialize scheduler
     scheduler = None
@@ -839,9 +838,11 @@ def initialize_model(args):
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
     elif args.sched_type == 'linear':
         num_training_steps = args.epochs * args.epoch_steps
-        scheduler = get_linear_schedule_with_warmup(optimizer, args.warmup_steps, num_training_steps, s_epoch-1)
+        last_step = s_epoch * args.epoch_steps
+        scheduler = get_linear_schedule_with_warmup(optimizer, args.warmup_steps, num_training_steps, last_step-1)
     elif args.sched_type == 'transformer':
-        scheduler = get_transformer_paper_schedule(optimizer, args.warmup_steps, s_epoch-1)
+        last_step = s_epoch * args.epoch_steps
+        scheduler = get_transformer_paper_schedule(optimizer, args.warmup_steps, last_step-1)
 
     model.teacher.iter = s_epoch
     return s_epoch, best, model, optimizer, scheduler
