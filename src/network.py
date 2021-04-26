@@ -264,10 +264,10 @@ class SpeechTransformer(AutoEncoderNet):
 
     def forward(self, mel, mel_len, noise_in=False, teacher_ratio=1, ret_enc_hid=False):
         enc_outputs, masks = self.encode(mel, mel_len, noise_in)
-        dec_out = self.decode_sequence(mel, mel_len, enc_outputs, masks)
+        pre_pred, post_pred, stop_pred, stop_lens = self.decode_sequence(mel, mel_len, enc_outputs, masks)
         if ret_enc_hid:
-            return dec_out, enc_outputs
-        return dec_out
+            return pre_pred, post_pred, stop_pred, enc_outputs
+        return pre_pred, post_pred, stop_pred
 
 
 class SpeechRNN(AutoEncoderNet):
