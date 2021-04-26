@@ -293,8 +293,8 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
         return t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss
     return t_cm_loss, s_cm_loss
 
-def discriminator_hidden_to_loss(model, hid, target_type, freeze_discriminator= False):
-    d_in = hid[-1]
+def discriminator_hidden_to_loss(model, hid, target_type, freeze_discriminator=False):
+    d_in = hid
     if freeze_discriminator:
         with torch.no_grad():
             d_out = model.discriminator(d_in)
@@ -314,7 +314,7 @@ def discriminator_step(model, batch):
     # quick check to determine between rnn and transformer
     # eventually should be built into the RNN and Transformer Encoder classes
     if len(t_enc_out) == 2:
-        t_hid = t_enc_out[0]
+        t_hid = t_enc_out[0][0][-1]
     else:
         t_hid = t_enc_out
     t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'text')
@@ -323,7 +323,7 @@ def discriminator_step(model, batch):
     with torch.no_grad():
         s_enc_out, _ = model.speech_m.encode(mel, mel_len)
     if len(s_enc_out) == 2:
-        s_hid = s_enc_out[0]
+        s_hid = s_enc_out[0][0][-1]
     else:
         s_hid = s_enc_out
     s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'speech')

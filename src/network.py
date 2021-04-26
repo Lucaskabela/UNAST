@@ -110,7 +110,7 @@ class UNAST(nn.Module):
         if ret_enc_hid:
             cm_s_hid = cm_s_e_o
             if len(cm_s_hid) == 2:
-                cm_s_hid = cm_s_hid[0]
+                cm_s_hid = cm_s_hid[0][0][-1]
             return text_pred, cm_s_hid
         return text_pred
 
@@ -124,7 +124,7 @@ class UNAST(nn.Module):
         if ret_enc_hid:
             cm_t_hid = cm_t_e_o
             if len(cm_t_hid) == 2:
-                cm_t_hid = cm_t_hid[0]
+                cm_t_hid = cm_t_hid[0][0][-1]
             return pre_pred, post_pred, stop_pred, cm_t_hid
         return pre_pred, post_pred, stop_pred
 
@@ -138,7 +138,7 @@ class UNAST(nn.Module):
         if ret_enc_hid:
             t_hid = t_e_o
             if len(t_hid) == 2:
-                t_hid = t_hid[0]
+                t_hid = t_hid[0][0][-1]
             return pre_pred, post_pred, stop_pred, stop_lens, t_hid
         return pre_pred, post_pred, stop_pred, stop_lens
 
@@ -152,7 +152,7 @@ class UNAST(nn.Module):
         if ret_enc_hid:
             s_hid = s_e_o
             if len(s_hid) == 2:
-                s_hid = s_hid[0]
+                s_hid = s_hid[0][0][-1]
             return text_pred, s_hid
         return text_pred
 
@@ -392,7 +392,7 @@ class SpeechRNN(AutoEncoderNet):
         encoder_outputs, pad_mask = self.encode(mel, mel_len, noise_in=noise_in)
         pre_pred, post_pred, stop_pred, stop_lens = self.decode_sequence(mel, mel_len, encoder_outputs, pad_mask, teacher_ratio=1)
         if ret_enc_hid:
-            return pre_pred, post_pred, stop_pred, encoder_outputs[0]
+            return pre_pred, post_pred, stop_pred, encoder_outputs[0][0][-1]
         return pre_pred, post_pred, stop_pred
 
 def generate_square_subsequent_mask(sz, DEVICE):
@@ -609,5 +609,5 @@ class TextRNN(AutoEncoderNet):
         encoder_outputs, pad_mask = self.encode(text, text_len, noise_in=noise_in)
         pred = self.decode_sequence(text, text_len, encoder_outputs, pad_mask, teacher_ratio=1)
         if ret_enc_hid:
-            return pred, encoder_outputs[0]
+            return pred, encoder_outputs[0][0][-1]
         return pred
