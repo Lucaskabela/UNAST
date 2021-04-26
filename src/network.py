@@ -458,7 +458,7 @@ class TextTransformer(AutoEncoderNet):
 
             # set stop_lens here!
             i += 1
-            stop_mask = (choice.squeeze(1) == EOS_IDX).logical_and(stop_lens == max_len)
+            stop_mask = (choice.squeeze(-1) == EOS_IDX).logical_and(stop_lens == max_len)
             stop_lens[stop_mask] = i
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
 
@@ -593,7 +593,7 @@ class TextRNN(AutoEncoderNet):
 
             # double check this!
             i += 1
-            stop_mask = (choice.squeeze() == EOS_IDX).logical_and(stop_lens == max_len)
+            stop_mask = (choice.squeeze(-1) == EOS_IDX).logical_and(stop_lens == max_len)
             stop_lens[stop_mask] = i
             keep_gen = torch.any(stop_lens.eq(max_len)) and i < max_len
 

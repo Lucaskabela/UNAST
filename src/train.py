@@ -23,10 +23,6 @@ import math
 import sys
 
 # DEVICE, WRITER are the only global variable
-def adjust_learning_rate(optimizer, e_in, step_num, warmup_step=4000):
-    lr = e_in**-0.5 * min(step_num * warmup_step**-1.5, step_num**-0.5)
-    for param_group in optimizer.param_groups:
-        param_group['lr'] = lr
 
 class BatchGetter():
     def __init__(self, args, supervised_dataset, unsupervised_dataset, full_dataset):
@@ -89,7 +85,6 @@ def process_batch(batch):
     # Send stuff we use alot to device this is character, mel, mel_input, and pos_mel
     text, mel, = text.to(DEVICE), mel.to(DEVICE)
     text_len, mel_len = text_len.to(DEVICE), mel_len.to(DEVICE)
-
 
     return (text, mel, text_len, mel_len), (gold_char, gold_mel, gold_stop)
 
@@ -341,11 +336,7 @@ def discriminator_step(model, batch):
 
 
 #####---- Use these to train on a task -----#####
-def optimizer_step(model, optimizer, step, args):
-    # Log to tensorboard
-    if WRITER:
-        WRITER.add_scalar('train/learning_rate', optimizer.param_groups[0]['lr'], step)
-
+def optimizer_step(model, optimizer, args):
     # Take a optimizer step!
     if args.grad_clip > 0.0:
         nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
@@ -500,6 +491,7 @@ def evaluate(model, valid_dataloader):
 
         # TODO: evaluate speech inference somehow?
         compare_outputs(text[-1][:], text_pred[-1][:], text_len[-1], text_pred_len[-1])
+
     return per/n_iters, losses
 
 def train(args):
@@ -512,9 +504,15 @@ def train(args):
             num_workers=args.num_workers, pin_memory=True)
     batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
 
-    s_epoch, best, model, optimizer = initialize_model(args)
-    milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
-    sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
+    # Define epoch_steps, 1 step does all 4 tasks
+    if args.epoch_steps <= 0:
+        # Define an epoch to be one pass through the discriminator's train dataset
+        # This makes it so the total number of steps is the same regardless # of whether we train the discriminator or not
+        total_batches_full_dataset = math.ceil(len(full_train_dataset) / args.batch_size)
+        args.epoch_steps = math.ceil(total_batches_full_dataset / args.d_steps)
+    epoch_steps = args.epoch_steps
+
+    s_epoch, best, model, optimizer, scheduler = initialize_model(args)
 
     print("Training model with {} parameters".format(model.num_params()))
     per, eval_losses = evaluate(model, valid_dataloader)
@@ -523,18 +521,7 @@ def train(args):
     max_obj_steps = max(args.ae_steps, args.cm_steps, args.sp_steps)
     if args.use_discriminator:
         max_obj_steps = max(max_obj_steps, args.d_steps)
-
     accum_steps = args.ae_steps + args.cm_steps + args.sp_steps
-    # one step is doing all 4 training tasks
-    if args.epoch_steps >= 0:
-        epoch_steps = args.epoch_steps
-    else:
-        # Define an epoch to be one pass through the discriminator's train
-        # dataset
-        # This makes it so the total number of steps is the same regardless # of whether we train the discriminator or not
-        total_batches_full_dataset = math.ceil(len(full_train_dataset) / args.batch_size)
-        epoch_steps = math.ceil(total_batches_full_dataset / args.d_steps)
-    total_step = s_epoch * epoch_steps
 
     for epoch in range(s_epoch, args.epochs):
         losses = defaultdict(list)
@@ -569,8 +556,7 @@ def train(args):
                 train_sp_step(losses, model, batch, step, accum_steps, args)
 
             # Gradients have accumulated - lets back prop and free memory
-            step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps
-            optimizer_step(model, optimizer, step, args)
+            optimizer_step(model, optimizer, args)
 
             # DISCRIMINATOR
             if args.use_discriminator:
@@ -583,18 +569,22 @@ def train(args):
                     train_discriminator_step(losses, model, batch, step, args.d_steps)
                 optimizer_step(model, optimizer, args)
 
-            if args.model_type == "transformer":
-                adjust_learning_rate(optimizer, args.e_in, total_step + 1)
-            if args.model_type == "rnn":
-                sched.step()
-
-            # Show parameters weight
+            # Monitor certain information
             if WRITER:
+                # Learning rate
+                step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps
+                WRITER.add_scalar("misc/learning_rate", optimizer.param_groups[0]['lr'], step)
+
+                # Model weights
                 step = epoch*epoch_steps*max_obj_steps + (s + 1)*max_obj_steps - 1
                 sum_params = 0
                 for param in model.parameters():
                     sum_params += torch.sum(param).abs().item()
-                WRITER.add_scalar("model_params_weight", sum_params, step)
+                WRITER.add_scalar("misc/model_params_weight", sum_params, step)
+
+            # LR scheduler step to change LR
+            if scheduler is not None:
+                scheduler.step()
 
             # Log train example to tensorboard
             if WRITER and (s + 1) % args.tb_example_step == 0:
@@ -760,6 +750,59 @@ def train_speech_auto(args):
     return model
 
 
+#####----- Model, optimizer, scheduler, dataset initializations -----#####
+def get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, last_epoch=-1):
+    """
+    Create a schedule with a learning rate that decreases linearly from the initial lr set in the optimizer to 0, after
+    a warmup period during which it increases linearly from 0 to the initial lr set in the optimizer.
+
+    Copied and modified from https://huggingface.co/transformers/_modules/transformers/optimization.html#get_constant_schedule_with_warmup
+
+    Args:
+        optimizer (:class:`~torch.optim.Optimizer`):
+            The optimizer for which to schedule the learning rate.
+        num_warmup_steps (:obj:`int`):
+            The number of steps for the warmup phase.
+        num_training_steps (:obj:`int`):
+            The total number of training steps.
+        last_epoch (:obj:`int`, `optional`, defaults to -1):
+            The index of the last epoch when resuming training.
+
+    Return:
+        :obj:`torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
+    """
+    def lr_lambda(current_step: int):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        return max(
+            0.0, float(num_training_steps - current_step) / float(max(1, num_training_steps - num_warmup_steps))
+        )
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
+
+
+def get_transformer_paper_schedule(optimizer, num_warmup_steps, last_epoch=-1):
+    """
+    Create a schedule with a learning rate that follows from the paper "Attention is all you need",
+    a linear warmup period followed by decrease that's inversely proportionl to square root of step number.
+
+    Args:
+        optimizer (:class:`~torch.optim.Optimizer`):
+            The optimizer for which to schedule the learning rate.
+        num_warmup_steps (:obj:`int`):
+            The number of steps for the warmup phase.
+        last_epoch (:obj:`int`, `optional`, defaults to -1):
+            The index of the last epoch when resuming training.
+
+    Return:
+        :obj:`torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
+    """
+    def lr_lambda(current_step: int):
+        if current_step < num_warmup_steps:
+            return float(current_step) / max(1.0, float(num_warmup_steps)**1.5)
+        return 1.0 / max(1.0, float(current_step)**0.5)
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
+
+
 def initialize_model(args):
     """
         Using args, initialize starting epoch, best per, model, optimizer
@@ -782,14 +825,26 @@ def initialize_model(args):
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     elif args.optim_type == 'adamw':
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    s_epoch, best = 0, 100
 
+    # continue training if needed
+    s_epoch, best = 0, 100
     if args.load_path is not None:
         s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
         s_epoch = s_epoch + 1
 
+    # initialize scheduler
+    scheduler = None
+    if args.sched_type == 'multistep':
+        milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
+    elif args.sched_type == 'linear':
+        num_training_steps = args.epochs * args.epoch_steps
+        scheduler = get_linear_schedule_with_warmup(optimizer, args.warmup_steps, num_training_steps, s_epoch-1)
+    elif args.sched_type == 'transformer':
+        scheduler = get_transformer_paper_schedule(optimizer, args.warmup_steps, s_epoch-1)
+
     model.teacher.iter = s_epoch
-    return s_epoch, best, model, optimizer
+    return s_epoch, best, model, optimizer, scheduler
 
 def initialize_datasets(args):
     # TODO: replace these if we want
