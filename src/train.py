@@ -611,6 +611,8 @@ def train(args):
         model.teacher.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
         save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
+        if args.save_every is not None and (epoch + 1) % args.save_every == 0:
+            save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path, epoch)
         if per < best:
             print("\t Best score - saving model!")
             best = per
