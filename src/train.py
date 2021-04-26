@@ -563,7 +563,7 @@ def train(args):
                 # unfreeze_model_parameters(model.discriminator)
                 # freeze_model_parameters(model.text_m)
                 # freeze_model_parameters(model.speech_m)
-                for _ in range(0, args.d_steps):
+                for si in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
                     step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
                     train_discriminator_step(losses, model, batch, step, args.d_steps)
