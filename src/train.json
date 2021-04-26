@@ -8,6 +8,11 @@
         90
     ],
     "lr_gamma": 1e-3,
+    "teacher_gamma": 0.98,
+    "teacher_milestones": [
+        5,
+        70
+    ],
     "save_step": 2000,
     "image_step": 500,
     "batch_size": 32,
@@ -31,7 +36,7 @@
     "num_layers": 1,
     "e_bi": false,
     "d_drop": 0.3,
-    "d_attn": false,
+    "d_attn": null,
     "attn_dim": 128,
     "grad_clip": 1.0,
     "num_workers": 4,

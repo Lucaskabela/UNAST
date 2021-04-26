@@ -8,8 +8,9 @@ Contains the code for training the encoder/decoders, including:
 from utils import *
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
-from network import TextRNN, SpeechRNN, UNAST
+from network import TextRNN, SpeechRNN, TextTransformer, SpeechTransformer, UNAST, Discriminator
 from tqdm import tqdm
+from torch.utils.tensorboard import SummaryWriter
 import audio_parameters as ap
 import argparse
 import torch.nn.functional as F
@@ -19,31 +20,33 @@ import numpy as np
 from collections import defaultdict
 from data import sequence_to_text
 import math
+import sys
 
-# DEVICE is only global variable
+# DEVICE, WRITER are the only global variable
 
 class BatchGetter():
     def __init__(self, args, supervised_dataset, unsupervised_dataset, full_dataset):
-        self.batch_size = args.batch_size
+        self.batch_size = args.train_batch_size
         self.num_workers = args.num_workers
 
         self.supervised_dataloader = DataLoader(supervised_dataset,
             batch_size=self.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=self.num_workers)
+            num_workers=self.num_workers, pin_memory=True)
         self.supervised_iter = iter(self.supervised_dataloader)
 
         self.unsupervised_dataloader = DataLoader(unsupervised_dataset,
             batch_size=self.batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=self.num_workers)
+            num_workers=self.num_workers, pin_memory=True)
         self.unsupervised_iter = iter(self.unsupervised_dataloader)
 
-        self.discriminator_dataloader = DataLoader(full_dataset,
-            batch_size=self.batch_size, shuffle=True,
-            collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=self.num_workers)
-        self.discriminator_iter = iter(self.discriminator_dataloader)
+        if args.use_discriminator:
+            self.discriminator_dataloader = DataLoader(full_dataset,
+                batch_size=self.batch_size, shuffle=True,
+                collate_fn=collate_fn_transformer, drop_last=True,
+                num_workers=self.num_workers, pin_memory=True)
+            self.discriminator_iter = iter(self.discriminator_dataloader)
 
     def get_supervised_batch(self):
         try:
@@ -71,134 +74,386 @@ class BatchGetter():
 
 def process_batch(batch):
     # Pos_text is unused so don't even bother loading it up
-    character, mel, text_len, mel_len = batch
+    text, mel, text_len, mel_len = batch
 
-    # send stuff we use a lot to device - this is character, mel, mel_input, and pos_mel
-    gold_mel, gold_char = mel.detach(), character.detach().permute(1, 0)
-    character, mel, = character.to(DEVICE), mel.to(DEVICE)
-
-    # stop label should be 1 for length
-    # currently, find first nonzero (so pad_idx) in pos_mel, or set to length
+    # Detach gold labels stuff we use a lot to device
+    gold_mel, gold_char = mel.detach(), text.detach()
+    # stop label should be 1 for length, subtracting 1 for 0 based indexing
     with torch.no_grad():
-        # Subtract 1 from mel_lengths to get 0 based indexing!
         gold_stop = F.one_hot(mel_len - 1, mel.shape[1]).float().detach()
-    return (character, mel, text_len, mel_len), (gold_char, gold_mel, gold_stop)
+
+    # Send stuff we use alot to device this is character, mel, mel_input, and pos_mel
+    text, mel, = text.to(DEVICE), mel.to(DEVICE)
+    text_len, mel_len = text_len.to(DEVICE), mel_len.to(DEVICE)
+
+    return (text, mel, text_len, mel_len), (gold_char, gold_mel, gold_stop)
 
 
 #####----- LOSS FUNCTIONS -----#####
-# TODO: add weights for the losses in args?
-def text_loss(gold_char, text_pred):
-    return F.cross_entropy(text_pred, gold_char, ignore_index=PAD_IDX)
 
-def speech_loss(gold_mel, stop_label, pred_mel, mel_len, stop_pred):
+# Masked MSE LOSS
+def masked_mse(gold_mel, pred_mel, mel_mask):
+    diff2 = (torch.flatten(gold_mel) - torch.flatten(pred_mel)) ** 2.0 * torch.flatten(mel_mask)
+    result = torch.sum(diff2) / torch.sum(mel_mask)
+    return result
+
+def text_loss(gold_char, text_pred, eos_weight=1.0):
+    weight = torch.ones(text_pred.shape[1], device=DEVICE)
+    weight[EOS_IDX] = eos_weight
+    return F.cross_entropy(text_pred,
+                           gold_char,
+                           weight=weight,
+                           ignore_index=PAD_IDX)
+
+def speech_loss(gold_mel, stop_label, pred_mel, post_pred_mel, mel_len, stop_pred, eos_weight=1.0):
     # Apply length mask to pred_mel!
-    pred_mel = pred_mel * sent_lens_to_mask(mel_len, pred_mel.shape[1]).detach().unsqueeze(-1)
-    pred_loss = F.mse_loss(pred_mel, gold_mel)
-    stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
-    return pred_loss + stop_loss
+    mel_mask = sent_lens_to_mask(mel_len, pred_mel.shape[1]).unsqueeze(-1).repeat(1, 1, pred_mel.shape[2])
+    pred_loss = masked_mse(gold_mel, pred_mel, mel_mask)
+    post_pred_loss = masked_mse(gold_mel, post_pred_mel, mel_mask)
+    stop_weight = torch.where(stop_label.eq(1),
+                              torch.tensor(eos_weight).to(DEVICE),
+                              torch.ones(1, device=DEVICE))
+    stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(-1), stop_label, pos_weight=stop_weight)
+    return pred_loss + post_pred_loss + stop_loss
+
+def cross_entropy(input, target, size_average=True):
+    """ Cross entropy that accepts soft targets
+    Args:
+         pred: predictions for neural network
+         targets: targets, can be soft
+         size_average: if false, sum is returned instead of mean
+
+    Examples::
+
+        input = torch.FloatTensor([[1.1, 2.8, 1.3], [1.1, 2.1, 4.8]])
+        input = torch.autograd.Variable(out, requires_grad=True)
+
+        target = torch.FloatTensor([[0.05, 0.9, 0.05], [0.05, 0.05, 0.9]])
+        target = torch.autograd.Variable(y1)
+        loss = cross_entropy(input, target)
+        loss.backward()
+    """
+    logsoftmax = nn.LogSoftmax(1)
+    if size_average:
+        return torch.mean(torch.sum(-target * logsoftmax(input), dim=1))
+    else:
+        return torch.sum(torch.sum(-target * logsoftmax(input), dim=1))
 
 def discriminator_loss(output, target):
-    return F.cross_entropy(output, target)
+    return cross_entropy(output, target)
 
+def discriminator_target(output, target_type, smoothing=0.1):
+    """
+    Create the target labels with smoothing
+    Params
+        -output : [batch_size x 2]
+        -type : 'text' or 'speech'
+        -smoothing : label smoothing factor
+    Return
+        [batch_size x 2] tensor with target smoothed labels
+    """
+    target = torch.zeros_like(output)
+    if target_type == 'text':
+        smoothed_target_label = [1 - smoothing, smoothing]
+    else:
+        # target_type == 'speech' implicitly
+        smoothed_target_label = [smoothing, 1 - smoothing]
+    smoothed_target_label = torch.as_tensor(smoothed_target_label).to(target)
+    target[:,] = smoothed_target_label
+    return target
+
+def check_nan_loss(model, loss, loss_type, text_gold, text_pred, speech_gold, speech_pred, stop_gold, stop_pred):
+    if torch.isnan(loss):
+        print(f"Discovered NaN loss on {loss_type}!")
+        if text_gold is not None:
+            print("Text gold:")
+            for idx in range(text_gold.shape[0]):
+                print(f"{idx}. {sequence_to_text(text_gold[idx].detach().cpu().numpy())}")
+        if text_pred is not None:
+            print("Text pred:")
+            for idx in range(text_pred.shape[0]):
+                print(f"{idx}. {sequence_to_text(text_pred[idx].detach().cpu().numpy())}")
+        torch.set_printoptions(edgeitems=1000, profile="full")
+        if speech_gold is not None:
+            print("Speech gold:")
+            for idx in range(speech_gold.shape[0]):
+                print(idx)
+                print(speech_gold[idx])
+        if speech_pred is not None:
+            print("Speech pred:")
+            for idx in range(speech_pred.shape[0]):
+                print(idx)
+                print(speech_pred[idx])
+        if stop_gold is not None:
+            print("Stop gold:")
+            print(stop_gold)
+        if stop_pred is not None:
+            print("Stop pred:")
+            print(stop_pred)
+        print("=============== MODEL ===============")
+        print(model)
+        sys.exit("Loss is NaN")
 
 #####----- Use these to run a task on a batch ----#####
-def autoencoder_step(model, batch):
+def autoencoder_step(model, batch, args, use_dis_loss=False):
     """
     Compute and return the loss for autoencoders
     """
-    x, y = process_batch(batch)
-    character, mel, _, mel_len  = x
+    x, y = batch
+    text, mel, text_len, mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
-    text_pred = model.text_ae(character).permute(1, 2, 0)
-    pred, stop_pred = model.speech_ae(mel)
+    if use_dis_loss:
+        text_pred, t_hid = model.text_ae(text, text_len, ret_enc_hid=use_dis_loss)
+        text_pred = text_pred.permute(0, 2, 1)
+        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech', freeze_discriminator=True)
 
-    s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred,  mel_len.to(DEVICE), stop_pred)
-    t_ae_loss = text_loss(gold_char.to(DEVICE), text_pred)
+        pre_pred, post_pred, stop_pred, s_hid = model.speech_ae(mel, mel_len, ret_enc_hid=use_dis_loss)
+        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text', freeze_discriminator=True)
+    else:
+        text_pred = model.text_ae(text, text_len).permute(0, 2, 1)
+        pre_pred, post_pred, stop_pred = model.speech_ae(mel, mel_len)
+
+    s_ae_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
+    t_ae_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
+
+    # Check loss is not NaN
+    check_nan_loss(model, t_ae_loss, "ae_text_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+    check_nan_loss(model, s_ae_loss, "ae_speech_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+    if use_dis_loss:
+        check_nan_loss(model, t_d_loss, "ae_text_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+        check_nan_loss(model, s_d_loss, "ae_speech_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+
+    if use_dis_loss:
+        return t_ae_loss, s_ae_loss, t_d_loss, s_d_loss
     return t_ae_loss, s_ae_loss
 
-def supervised_step(model, batch):
-    x, y = process_batch(batch)
-    character, mel, _, mel_len  = x
+def supervised_step(model, batch, args, use_dis_loss=False):
+    x, y = batch
+    text, mel, text_len, mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
-    pred, stop_pred = model.tts(character, mel)
-    text_pred = model.asr(character, mel).permute(1, 2, 0)
+    mel_aug = specaugment(mel, mel_len)
+    if use_dis_loss:
+        pre_pred, post_pred, stop_pred, stop_lens, t_hid = model.tts(text, text_len, mel, mel_len, ret_enc_hid=use_dis_loss)
+        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech', freeze_discriminator=True)
 
-    tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len.to(DEVICE), stop_pred)
-    asr_loss = text_loss(gold_char.to(DEVICE), text_pred)
+        text_pred, s_hid = model.asr(text, text_len, mel_aug, mel_len, ret_enc_hid=use_dis_loss)
+        text_pred = text_pred.permute(0, 2, 1)
+        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text', freeze_discriminator=True)
+    else:
+        pre_pred, post_pred, stop_pred, stop_lens = model.tts(text, text_len, mel, mel_len)
+        text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
+
+    tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
+    asr_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
+
+    # Check loss is not NaN
+    check_nan_loss(model, asr_loss, "sp_asr_loss", None, text_pred, mel_aug, None, None, None)
+    check_nan_loss(model, tts_loss, "sp_tts_loss", text, None, None, post_pred, None, stop_pred)
+    if use_dis_loss:
+        check_nan_loss(model, t_d_loss, "sp_text_dis_loss", None, text_pred, mel_aug, None, None, None)
+        check_nan_loss(model, s_d_loss, "sp_speech_dis_loss", text, None, None, post_pred, None, stop_pred)
+
+    if use_dis_loss:
+        return asr_loss, tts_loss, t_d_loss, s_d_loss
     return asr_loss, tts_loss
 
-def crossmodel_step(model, batch):
+def crossmodel_step(model, batch, args, use_dis_loss=False):
     #NOTE: not sure if this will fail bc multiple grads on the model...
-    x, y = process_batch(batch)
-    character, mel, _,  mel_len  = x
+    x, y = batch
+    text, mel, text_len,  mel_len  = x
     gold_char, gold_mel, gold_stop = y
 
     # Do speech!
-    pred, stop_pred = model.cm_speech_in(mel)
-    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred, mel_len.to(DEVICE), stop_pred)
+    if use_dis_loss:
+        pre_pred, post_pred, stop_pred, cm_t_hid = model.cm_speech_in(mel, mel_len, ret_enc_hid=use_dis_loss)
+        cm_t_d_loss = discriminator_hidden_to_loss(model, cm_t_hid, 'speech', freeze_discriminator=True)
+    else:
+        pre_pred, post_pred, stop_pred = model.cm_speech_in(mel, mel_len)
+    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
 
     # Now do text!
-    text_pred = model.cm_text_in(character).permute(1, 2, 0)
-    t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred)
+    if use_dis_loss:
+        text_pred, cm_s_hid = model.cm_text_in(text, text_len, ret_enc_hid=use_dis_loss)
+        text_pred = text_pred.permute(0, 2, 1)
+        cm_s_d_loss = discriminator_hidden_to_loss(model, cm_s_hid, 'text', freeze_discriminator=True)
+    else:
+        text_pred = model.cm_text_in(text, text_len).permute(0, 2, 1)
+    t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
+
+    # Check loss is not NaN
+    check_nan_loss(model, t_cm_loss, "cm_text_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+    check_nan_loss(model, s_cm_loss, "cm_speech_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+    if use_dis_loss:
+        check_nan_loss(model, cm_t_d_loss, "cm_text_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+        check_nan_loss(model, cm_s_d_loss, "cm_speech_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+
+    if use_dis_loss:
+        return t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss
     return t_cm_loss, s_cm_loss
+
+def discriminator_hidden_to_loss(model, hid, target_type, freeze_discriminator= False):
+    d_in = hid[-1]
+    if freeze_discriminator:
+        with torch.no_grad():
+            d_out = model.discriminator(d_in)
+    else:
+        d_out = model.discriminator(d_in)
+    target = discriminator_target(d_out, target_type)
+    d_loss = discriminator_loss(d_out, target)
+    return d_loss
+
+def discriminator_step(model, batch):
+    x, _ = process_batch(batch)
+    text, mel, text_len, mel_len = x
+
+    # text
+    with torch.no_grad():
+        t_enc_out, _ = model.text_m.encode(text, text_len)
+    # quick check to determine between rnn and transformer
+    # eventually should be built into the RNN and Transformer Encoder classes
+    if len(t_enc_out) == 2:
+        t_hid = t_enc_out[0]
+    else:
+        t_hid = t_enc_out
+    t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'text')
+
+    # speech
+    with torch.no_grad():
+        s_enc_out, _ = model.speech_m.encode(mel, mel_len)
+    if len(s_enc_out) == 2:
+        s_hid = s_enc_out[0]
+    else:
+        s_hid = s_enc_out
+    s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'speech')
+
+    # Check loss is not NaN
+    check_nan_loss(model, t_d_loss, "dis_text_loss", text, None, mel, None, None, None)
+    check_nan_loss(model, s_d_loss, "dis_speech_loss", text, None, mel, None, None, None)
+
+    return t_d_loss, s_d_loss
 
 
 #####---- Use these to train on a task -----#####
-def optimizer_step(loss, model, optimizer, args):
-
+def optimizer_step(model, optimizer, args):
     # Take a optimizer step!
-    optimizer.zero_grad()
-    loss.backward()
     if args.grad_clip > 0.0:
         nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
     optimizer.step()
-    return loss.detach().cpu().item()
+    optimizer.zero_grad(set_to_none=True)
 
-def train_sp_step(losses, model, optimizer, batch, args):
-    asr_loss, tts_loss = supervised_step(model, batch)
-    loss = tts_loss + asr_loss
+def train_sp_step(losses, model, batch, step, accum_steps, args):
+    batch = process_batch(batch)
+    if args.use_discriminator:
+        asr_loss, tts_loss, t_d_loss, s_d_loss = supervised_step(model, batch, args, args.use_discriminator)
+        loss = tts_loss + asr_loss + t_d_loss + s_d_loss
+    else:
+        asr_loss, tts_loss = supervised_step(model, batch, args)
+        loss = tts_loss + asr_loss
+    loss = loss / accum_steps
 
-    # Take a optimizer and append losses here!
-    optimizer_step(loss, model, optimizer, args)
+    loss.backward()
 
     # Log losses
     losses['asr_'].append(asr_loss.detach().cpu().item())
     losses['tts_'].append(tts_loss.detach().cpu().item())
+    if args.use_discriminator:
+        losses['t_sp_d'].append(t_d_loss.detach().cpu().item())
+        losses['s_sp_d'].append(s_d_loss.detach().cpu().item())
 
-def train_ae_step(losses, model, optimizer, batch, args):
+    # Log to tensorboard
+    if WRITER:
+        WRITER.add_scalar('train/sp_asr_loss', asr_loss.detach().cpu().item(), step)
+        WRITER.add_scalar('train/sp_tts_loss', tts_loss.detach().cpu().item(), step)
+        if args.use_discriminator:
+            WRITER.add_scalar('train/sp_t_dis_loss', t_d_loss.detach().cpu().item(), step)
+            WRITER.add_scalar('train/sp_s_dis_loss', s_d_loss.detach().cpu().item(), step)
 
-    t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
-    loss = t_ae_loss + s_ae_loss
+    return loss
 
-    # Take a optimizer step!
-    optimizer_step(loss, model, optimizer, args)
+def train_ae_step(losses, model, batch, step, accum_steps, args):
+    batch = process_batch(batch)
+    if args.use_discriminator:
+        t_ae_loss, s_ae_loss, t_d_loss, s_d_loss = autoencoder_step(model, batch, args, args.use_discriminator)
+        loss = t_ae_loss + s_ae_loss + t_d_loss + s_d_loss
+    else:
+        t_ae_loss, s_ae_loss = autoencoder_step(model, batch, args)
+        loss = t_ae_loss + s_ae_loss
+    loss = loss / accum_steps
+    loss.backward()
 
     # Log losses
     losses['t_ae'].append(t_ae_loss.detach().cpu().item())
     losses['s_ae'].append(s_ae_loss.detach().cpu().item())
+    if args.use_discriminator:
+        losses['t_ae_d'].append(t_d_loss.detach().cpu().item())
+        losses['s_ae_d'].append(s_d_loss.detach().cpu().item())
 
-def train_cm_step(losses, model, optimizer, batch, args):
+    # Log to tensorboard
+    if WRITER:
+        WRITER.add_scalar('train/ae_t_loss', t_ae_loss.detach().cpu().item(), step)
+        WRITER.add_scalar('train/ae_s_loss', s_ae_loss.detach().cpu().item(), step)
+        if args.use_discriminator:
+            WRITER.add_scalar('train/ae_t_dis_loss', t_d_loss.detach().cpu().item(), step)
+            WRITER.add_scalar('train/ae_s_dis_loss', s_d_loss.detach().cpu().item(), step)
+
+    return loss
+
+def train_cm_step(losses, model, batch, step, accum_steps, args):
     # NOTE: do not use cross_model here bc need to take optimizer step inbetween
-    x, y = process_batch(batch)
-    character, mel, _, mel_len  = x
-    gold_char, gold_mel, gold_stop = y
+    batch = process_batch(batch)
 
-    # Do speech!
-    pred, stop_pred = model.cm_speech_in(mel)
-    s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pred,  mel_len.to(DEVICE), stop_pred)
-    optimizer_step(s_cm_loss, model, optimizer, args)
-
-    # Now do text!
-    text_pred = model.cm_text_in(character).permute(1, 2, 0)
-    t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred)
-    optimizer_step(t_cm_loss, model, optimizer, args)
+    if args.use_discriminator:
+        t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss = crossmodel_step(model, batch, args, args.use_discriminator)
+        loss = s_cm_loss + t_cm_loss + cm_t_d_loss + cm_s_d_loss
+    else:
+        t_cm_loss, s_cm_loss = crossmodel_step(model, batch, args)
+        loss = s_cm_loss + t_cm_loss
+    loss = loss / accum_steps
+    loss.backward()
 
     # Log losses
     losses['s_cm'].append(s_cm_loss.detach().cpu().item())
     losses['t_cm'].append(t_cm_loss.detach().cpu().item())
+    if args.use_discriminator:
+        losses['cm_s_cm_d'].append(cm_s_d_loss.detach().cpu().item())
+        losses['cm_t_cm_d'].append(cm_t_d_loss.detach().cpu().item())
 
+    # Log to tensorboard
+    if WRITER:
+        WRITER.add_scalar('train/cm_t_loss', t_cm_loss.detach().cpu().item(), step)
+        WRITER.add_scalar('train/cm_s_loss', s_cm_loss.detach().cpu().item(), step)
+        if args.use_discriminator:
+            WRITER.add_scalar('train/cm_t_dis_loss', cm_t_d_loss.detach().cpu().item(), step)
+            WRITER.add_scalar('train/cm_s_dis_loss', cm_s_d_loss.detach().cpu().item(), step)
+
+    return loss
+
+def train_discriminator_step(losses, model, batch, step, accum_steps):
+    t_d_loss, s_d_loss = discriminator_step(model, batch)
+
+    loss = (t_d_loss + s_d_loss) / accum_steps
+    loss.backward()
+
+    # Log losses
+    losses['t_d'].append(t_d_loss.detach().cpu().item())
+    losses['s_d'].append(s_d_loss.detach().cpu().item())
+
+    # Log to tensorboard
+    if WRITER:
+        WRITER.add_scalar('train/dis_text_loss', t_d_loss.detach().cpu().item(), step)
+        WRITER.add_scalar('train/dis_speech_loss', s_d_loss.detach().cpu().item(), step)
+
+    return loss
+
+def freeze_model_parameters(model):
+    for param in model.parameters():
+        param.requires_grad = False
+
+def unfreeze_model_parameters(model):
+    for param in model.parameters():
+        param.requires_grad = True
 
 #####----- Train and evaluate -----#####
 def evaluate(model, valid_dataloader):
@@ -214,28 +469,29 @@ def evaluate(model, valid_dataloader):
         per, n_iters = 0, 0
 
         for batch in valid_dataloader:
-            character, mel, text_len, _ = batch
+            batch = process_batch(batch)
+            x, _ = batch
+            text, mel, text_len, mel_len = x
 
-            t_ae_loss, s_ae_loss = autoencoder_step(model, batch)
-            losses['t_ae'].append(t_ae_loss.detach().cpu().item())
-            losses['s_ae'].append(s_ae_loss.detach().cpu().item())
+            t_ae_loss, s_ae_loss = autoencoder_step(model, batch, args)
+            losses['t_ae'].append(t_ae_loss.detach().item())
+            losses['s_ae'].append(s_ae_loss.detach().item())
 
-            asr_loss, tts_loss = supervised_step(model, batch)
-            losses['asr_'].append(asr_loss.detach().cpu().item())
-            losses['tts_'].append(tts_loss.detach().cpu().item())
+            asr_loss, tts_loss = supervised_step(model, batch, args)
+            losses['asr_'].append(asr_loss.detach().item())
+            losses['tts_'].append(tts_loss.detach().item())
 
-            t_cm_loss, s_cm_loss = crossmodel_step(model, batch)
-            losses['s_cm'].append(s_cm_loss.detach().cpu().item())
-            losses['t_cm'].append(t_cm_loss.detach().cpu().item())
+            t_cm_loss, s_cm_loss = crossmodel_step(model, batch, args)
+            losses['s_cm'].append(s_cm_loss.detach().item())
+            losses['t_cm'].append(t_cm_loss.detach().item())
 
-            text_pred = model.asr(None, mel.to(DEVICE), infer=True).squeeze()
-            len_mask_max, len_mask_idx = torch.max((text_pred == PAD_IDX), dim=1)
-            len_mask_idx[len_mask_max == 0] = text_pred.shape[1]
-            per += compute_per(character.to(DEVICE), text_pred, text_len.to(DEVICE), len_mask_idx)
+            text_pred, text_pred_len = model.asr(None, None, mel, mel_len, infer=True)
+            per += compute_per(text, text_pred.squeeze(-1), text_len, text_pred_len)
             n_iters += 1
 
-    # TODO: evaluate speech inference somehow?
-    compare_outputs(character[-1][:], text_pred[-1][:], text_len[-1], len_mask_idx[-1])
+        # TODO: evaluate speech inference somehow?
+        compare_outputs(text[-1][:], text_pred[-1][:], text_len[-1], text_pred_len[-1])
+
     return per/n_iters, losses
 
 def train(args):
@@ -243,59 +499,116 @@ def train(args):
     supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset = \
         initialize_datasets(args)
     valid_dataloader = DataLoader(val_dataset,
-            batch_size=args.batch_size, shuffle=True,
+            batch_size=args.eval_batch_size, shuffle=True,
             collate_fn=collate_fn_transformer, drop_last=True,
-            num_workers=args.num_workers)
-    s_epoch, best, model, optimizer = initialize_model(args)
+            num_workers=args.num_workers, pin_memory=True)
+    batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
+
+    # Define epoch_steps, 1 step does all 4 tasks
+    if args.epoch_steps <= 0:
+        # Define an epoch to be one pass through the discriminator's train dataset
+        # This makes it so the total number of steps is the same regardless # of whether we train the discriminator or not
+        total_batches_full_dataset = math.ceil(len(full_train_dataset) / args.batch_size)
+        args.epoch_steps = math.ceil(total_batches_full_dataset / args.d_steps)
+    epoch_steps = args.epoch_steps
+
+    s_epoch, best, model, optimizer, scheduler = initialize_model(args)
+
     print("Training model with {} parameters".format(model.num_params()))
     per, eval_losses = evaluate(model, valid_dataloader)
     log_loss_metrics(eval_losses, -1, eval=True)
-    milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
-    sched = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
-    batch_getter = BatchGetter(args, supervised_train_dataset, unsupervised_train_dataset, full_train_dataset)
-    for epoch in range(s_epoch, args.epochs):
-        model.train()
-        losses = defaultdict(list)
 
-        # one step is doing all 4 training tasks
-        if args.epoch_steps >= 0:
-            epoch_steps = args.epoch_steps
-        else:
-            # Define an epoch to be one pass through the discriminator's train
-            # dataset
-            # This makes it so the total number of steps is the same regardless # of whether we train the discriminator or not
-            total_batches_full_dataset = math.ceil(len(full_train_dataset) / args.batch_size)
-            epoch_steps = math.ceil(total_batches_full_dataset / args.d_steps)
+    max_obj_steps = max(args.ae_steps, args.cm_steps, args.sp_steps)
+    if args.use_discriminator:
+        max_obj_steps = max(max_obj_steps, args.d_steps)
+    accum_steps = args.ae_steps + args.cm_steps + args.sp_steps
+
+    for epoch in range(s_epoch, args.epochs):
+        losses = defaultdict(list)
 
         bar = tqdm(range(0, epoch_steps))
         bar.set_description("Epoch {}".format(epoch))
-        for _ in bar:
+        for s in bar:
+            model.train()
+
+            # if args.use_discriminator:
+            #     # need to freeze the disciminator first
+            #     freeze_model_parameters(model.discriminator)
+            #     unfreeze_model_parameters(model.text_m)
+            #     unfreeze_model_parameters(model.speech_m)
+
             # DENOISING AUTO ENCODER
-            for _ in range(0, args.ae_steps):
+            for si in range(0, args.ae_steps):
                 batch = batch_getter.get_unsupervised_batch()
-                train_ae_step(losses, model, optimizer, batch, args)
+                step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
+                train_ae_step(losses, model, batch, step, accum_steps, args)
 
             # CM TTS/ASR
-            for _ in range(0, args.cm_steps):
+            for si in range(0, args.cm_steps):
                 batch = batch_getter.get_unsupervised_batch()
-                train_cm_step(losses, model, optimizer, batch, args)
+                step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
+                train_cm_step(losses, model, batch, step, accum_steps, args)
 
             # SUPERVISED
-            for _ in range(0, args.sp_steps):
+            for si in range(0, args.sp_steps):
                 batch = batch_getter.get_supervised_batch()
-                train_sp_step(losses, model, optimizer, batch, args)
+                step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
+                train_sp_step(losses, model, batch, step, accum_steps, args)
+
+            # Gradients have accumulated - lets back prop and free memory
+            optimizer_step(model, optimizer, args)
 
             # DISCRIMINATOR
             if args.use_discriminator:
+                # unfreeze_model_parameters(model.discriminator)
+                # freeze_model_parameters(model.text_m)
+                # freeze_model_parameters(model.speech_m)
                 for _ in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
-                    # TODO: Train discriminator
+                    step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
+                    train_discriminator_step(losses, model, batch, step, args.d_steps)
+                optimizer_step(model, optimizer, args)
+
+            # Monitor certain information
+            if WRITER:
+                # Learning rate
+                step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps
+                WRITER.add_scalar("misc/learning_rate", optimizer.param_groups[0]['lr'], step)
+
+                # Model weights
+                step = epoch*epoch_steps*max_obj_steps + (s + 1)*max_obj_steps - 1
+                sum_params = 0
+                for param in model.parameters():
+                    sum_params += torch.sum(param).abs().item()
+                WRITER.add_scalar("misc/model_params_weight", sum_params, step)
+
+            # LR scheduler step to change LR
+            if scheduler is not None:
+                scheduler.step()
+
+            # Log train example to tensorboard
+            if WRITER and (s + 1) % args.tb_example_step == 0:
+                idx = np.random.randint(0, len(supervised_train_dataset))
+                ex = supervised_train_dataset[idx]
+                step = epoch*epoch_steps*max_obj_steps + (s + 1)*max_obj_steps - 1
+                log_tb_example(model, ex, step)
 
         # Eval and save
-        log_loss_metrics(losses, epoch)
         per, eval_losses = evaluate(model, valid_dataloader)
+        log_loss_metrics(losses, epoch)
         log_loss_metrics(eval_losses, epoch, eval=True)
-        sched.step()
+
+        # Log eval example to tensorboard
+        if WRITER:
+            step = (epoch + 1)*epoch_steps*max_obj_steps - 1
+            idx = np.random.randint(0, len(val_dataset))
+            ex = val_dataset[idx]
+            log_tb_example(model, ex, step, "eval")
+            for key_, loss in eval_losses.items():
+                WRITER.add_scalar(f"eval/{key_}_loss", np.mean(loss), step)
+            WRITER.add_scalar(f"eval/per", per, step)
+
+        model.teacher.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
         save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
         if per < best:
@@ -303,6 +616,38 @@ def train(args):
             best = per
     model.eval()
     return model
+
+
+def log_tb_example(model, ex, step, name="train"):
+    """
+    Log example of model output to tensorboard
+    params
+        - model: the ASR/TTS model
+        - ex: an input example from LJSpeech
+        - step: tensorboard global step
+    """
+    model.eval()
+    with torch.no_grad():
+        if WRITER:
+            # Convert input to tensor
+            ex_mel = torch.tensor(ex["mel"]).unsqueeze(0)
+            ex_text = torch.LongTensor(ex["text"]).unsqueeze(0)
+            ex_text_len = torch.as_tensor(ex["text_length"], dtype=torch.long).unsqueeze(0)
+            ex_mel_len = torch.as_tensor(ex["mel_length"], dtype=torch.long).unsqueeze(0)
+
+            # Get output
+            text_pred, text_pred_len = model.asr(None, None, ex_mel.to(DEVICE), ex_mel_len.to(DEVICE), infer=True)
+            text_pred = text_pred.squeeze(dim=0).detach().cpu().numpy()
+            text_pred_len = text_pred_len.squeeze(dim=0).detach().cpu().item()
+            _, speech_pred, _, speech_pred_len = model.tts(ex_text.to(DEVICE), ex_text_len.to(DEVICE), None, None, infer=True)
+            speech_pred = speech_pred.squeeze(dim=0).detach().cpu().numpy()
+            speech_pred_len = speech_pred_len.squeeze(dim=0).detach().cpu().item()
+
+            WRITER.add_text(f"{name}/text_gold", sequence_to_text(ex["text"][:ex_text_len]), step)
+            WRITER.add_text(f"{name}/text_pred", sequence_to_text(text_pred[:text_pred_len]), step)
+            WRITER.add_image(f"{name}/speech_gold", np.flip(ex["mel"][:ex_mel_len].transpose(), axis=0), step, dataformats="HW")
+            WRITER.add_image(f"{name}/speech_pred", np.flip(speech_pred[:speech_pred_len].transpose(), axis=0), step, dataformats="HW")
+
 
 def log_loss_metrics(losses, epoch, eval=False):
     kind = "Train"
@@ -314,7 +659,6 @@ def log_loss_metrics(losses, epoch, eval=False):
         out_str += "{} loss =  {:0.3f} \t".format(key_, np.mean(loss))
     print(out_str)
 
-    # TODO: Add tensorboard logging ?
 
 def train_text_auto(args):
     ''' Purely for testing purposes'''
@@ -326,7 +670,7 @@ def train_text_auto(args):
     #NOTE: Subset for prototyping
     # dataset = torch.utils.data.Subset(dataset, range(1000))
 
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+    dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
     train_log, valid_log = None, None
     model = TextRNN(args).to(DEVICE)
     print("Sent model to", DEVICE)
@@ -339,17 +683,17 @@ def train_text_auto(args):
         for data in dataloader:
             character, mel, mel_input, pos_text, pos_mel, text_len = data
             character = character.to(DEVICE)
-            pred = model.forward(character).permute(1, 2, 0)
+            pred = model.forward(character).permute(0, 2, 1)
 
-            char_ = character.permute(1, 0)
+            char_ = character
             loss = F.cross_entropy(pred, char_, ignore_index=PAD_IDX)
 
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             loss.backward()
             if args.grad_clip > 0.0:
                 nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
-            losses.append(loss.detach().cpu().item())
+            losses.append(loss.detach().item())
             if train_log is not None:
                 train_log.add_scalar("loss", losses[-1], global_step)
             global_step += 1
@@ -365,7 +709,7 @@ def train_speech_auto(args):
     dataset = get_dataset('unlabeled_train.csv')
     #NOTE: Subset for prototyping
     # dataset = torch.utils.data.Subset(dataset, range(1000))
-    dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
+    dataloader = DataLoader(dataset, batch_size=args.train_batch_size, shuffle=True, collate_fn=collate_fn_transformer, drop_last=True, num_workers=16)
     train_log, valid_log = None, None
     model = SpeechRNN(args).to(DEVICE)
     print("Sent model to", DEVICE)
@@ -392,12 +736,12 @@ def train_speech_auto(args):
             stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label)
 
             loss = pred_loss + stop_loss
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
             loss.backward()
             if args.grad_clip > 0.0:
                 nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
-            losses.append(loss.detach().cpu().item())
+            losses.append(loss.detach().item())
             if train_log is not None:
                 train_log.add_scalar("loss", losses[-1], global_step)
             global_step += 1
@@ -406,35 +750,102 @@ def train_speech_auto(args):
     return model
 
 
+#####----- Model, optimizer, scheduler, dataset initializations -----#####
+def get_linear_schedule_with_warmup(optimizer, num_warmup_steps, num_training_steps, last_epoch=-1):
+    """
+    Create a schedule with a learning rate that decreases linearly from the initial lr set in the optimizer to 0, after
+    a warmup period during which it increases linearly from 0 to the initial lr set in the optimizer.
+
+    Copied and modified from https://huggingface.co/transformers/_modules/transformers/optimization.html#get_constant_schedule_with_warmup
+
+    Args:
+        optimizer (:class:`~torch.optim.Optimizer`):
+            The optimizer for which to schedule the learning rate.
+        num_warmup_steps (:obj:`int`):
+            The number of steps for the warmup phase.
+        num_training_steps (:obj:`int`):
+            The total number of training steps.
+        last_epoch (:obj:`int`, `optional`, defaults to -1):
+            The index of the last epoch when resuming training.
+
+    Return:
+        :obj:`torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
+    """
+    def lr_lambda(current_step: int):
+        if current_step < num_warmup_steps:
+            return float(current_step) / float(max(1, num_warmup_steps))
+        return max(
+            0.0, float(num_training_steps - current_step) / float(max(1, num_training_steps - num_warmup_steps))
+        )
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
+
+
+def get_transformer_paper_schedule(optimizer, num_warmup_steps, last_epoch=-1):
+    """
+    Create a schedule with a learning rate that follows from the paper "Attention is all you need",
+    a linear warmup period followed by decrease that's inversely proportionl to square root of step number.
+
+    Args:
+        optimizer (:class:`~torch.optim.Optimizer`):
+            The optimizer for which to schedule the learning rate.
+        num_warmup_steps (:obj:`int`):
+            The number of steps for the warmup phase.
+        last_epoch (:obj:`int`, `optional`, defaults to -1):
+            The index of the last epoch when resuming training.
+
+    Return:
+        :obj:`torch.optim.lr_scheduler.LambdaLR` with the appropriate schedule.
+    """
+    def lr_lambda(current_step: int):
+        if current_step < num_warmup_steps:
+            return float(current_step) / max(1.0, float(num_warmup_steps)**1.5)
+        return 1.0 / max(1.0, float(current_step)**0.5)
+    return torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
+
+
 def initialize_model(args):
     """
         Using args, initialize starting epoch, best per, model, optimizer
     """
-    text_m, speech_m, discriminator = None, None, None
+    text_m, speech_m, discriminator, teacher = None, None, None, get_teacher_ratio(args)
     if args.model_type == 'rnn':
-        text_m = TextRNN(args).to(DEVICE)
-        speech_m = SpeechRNN(args).to(DEVICE)
+        text_m = TextRNN(args)
+        speech_m = SpeechRNN(args)
     elif args.model_type == 'transformer':
-        # TODO: Fill it in
-        pass
+        text_m = TextTransformer(args)
+        speech_m = SpeechTransformer(args)
 
     if args.use_discriminator:
-        # TODO: Fill it in
-        pass
-    model = UNAST(text_m, speech_m, discriminator)
+        discriminator = Discriminator(args.hidden)
+    model = UNAST(text_m, speech_m, discriminator, teacher).to(DEVICE)
 
     # initialize optimizer
     optimizer = None
     if args.optim_type == 'adam':
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    elif args.optim_type == 'adamw':
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
+    # continue training if needed
     s_epoch, best = 0, 100
-
     if args.load_path is not None:
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
         s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
-        s_epoch = s_epoch + 1
 
-    return s_epoch, best, model, optimizer
+    # initialize scheduler
+    scheduler = None
+    if args.sched_type == 'multistep':
+        milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
+    elif args.sched_type == 'linear':
+        num_training_steps = args.epochs * args.epoch_steps
+        last_step = s_epoch * args.epoch_steps
+        scheduler = get_linear_schedule_with_warmup(optimizer, args.warmup_steps, num_training_steps, last_step-1)
+    elif args.sched_type == 'transformer':
+        last_step = s_epoch * args.epoch_steps
+        scheduler = get_transformer_paper_schedule(optimizer, args.warmup_steps, last_step-1)
+
+    model.teacher.iter = s_epoch
+    return s_epoch, best, model, optimizer, scheduler
 
 def initialize_datasets(args):
     # TODO: replace these if we want
@@ -443,22 +854,31 @@ def initialize_datasets(args):
     unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
     val_dataset = get_dataset('val.csv')
     full_train_dataset = get_dataset('full_train.csv')
-    ## For testing
-    # test_size = 100
-    # supervised_train_dataset = torch.utils.data.Subset(supervised_train_dataset, range(test_size))
-    # unsupervised_train_dataset = torch.utils.data.Subset(unsupervised_train_dataset, range(test_size))
-    # val_dataset = torch.utils.data.Subset(val_dataset, range(test_size))
-    # full_train_dataset = torch.utils.data.Subset(full_train_dataset, range(test_size))
+
+    # TODO: remove the subsets used for experimentation
+    #supervised_train_dataset = torch.utils.data.Subset(supervised_train_dataset, range(100))
+    #unsupervised_train_dataset = torch.utils.data.Subset(unsupervised_train_dataset, range(100))
+    #val_dataset = torch.utils.data.Subset(val_dataset, range(100))
+    #full_train_dataset = torch.utils.data.Subset(full_train_dataset, range(100))
+
     return supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--config', help='JSON config files')
-    # TODO: clean up the parser/initialization of models
-    # NOTES: Layers should be the same
-    # Hidden sizes should be the same (or models changed to fix it)
     args = parse_with_config(parser)
+
     global DEVICE
+    global WRITER
     DEVICE = init_device(args)
+    print(f"Device: {DEVICE}")
+
+    if args.tb_log_path:
+        WRITER = SummaryWriter(log_dir=args.tb_log_path, flush_secs=60)
+        WRITER.add_text("params", str(vars(args)), 0)
+
     train(args)
+
+    if WRITER:
+        WRITER.close()
