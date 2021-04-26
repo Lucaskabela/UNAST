@@ -119,7 +119,7 @@ class UNAST(nn.Module):
             s_e_o, s_mask = self.speech_m.encode(mel, mel_len)
             text_pred, text_pred_len = self.text_m.infer_sequence(s_e_o, s_mask)
         cm_t_e_o, cm_t_masks = self.text_m.encode(text_pred.detach(), text_pred_len.detach())
-        pre_pred, post_pred, stop_pred = self.speech_m.decode_sequence(mel, mel_len, cm_t_e_o,
+        pre_pred, post_pred, stop_pred, stop_lens = self.speech_m.decode_sequence(mel, mel_len, cm_t_e_o,
             cm_t_masks, teacher_ratio=1)
         if ret_enc_hid:
             cm_t_hid = cm_t_e_o
@@ -131,16 +131,16 @@ class UNAST(nn.Module):
     def tts(self, text, text_len, mel, mel_len, infer=False, ret_enc_hid=False):
         t_e_o, t_masks = self.text_m.encode(text, text_len)
         if not infer:
-            pre_pred, post_pred, stop_pred = self.speech_m.decode_sequence(mel, mel_len, t_e_o,
+            pre_pred, post_pred, stop_pred, stop_lens = self.speech_m.decode_sequence(mel, mel_len, t_e_o,
                 t_masks, teacher_ratio=1)
         else:
-            pre_pred, post_pred, stop_pred, _ = self.speech_m.infer_sequence(t_e_o, t_masks)
+            pre_pred, post_pred, stop_pred, stop_lens = self.speech_m.infer_sequence(t_e_o, t_masks)
         if ret_enc_hid:
             t_hid = t_e_o
             if len(t_hid) == 2:
                 t_hid = t_hid[0]
-            return pre_pred, post_pred, stop_pred, t_hid
-        return pre_pred, post_pred, stop_pred
+            return pre_pred, post_pred, stop_pred, stop_lens, t_hid
+        return pre_pred, post_pred, stop_pred, stop_lens
 
     def asr(self, text, text_len, mel, mel_len, infer=False, ret_enc_hid=False):
         s_e_o, s_masks = self.speech_m.encode(mel, mel_len)
@@ -260,7 +260,7 @@ class SpeechTransformer(AutoEncoderNet):
                                         tgt_pad_mask, input_pad_mask)
 
         (dec_out, stop_pred)  = self.postnet.mel_and_stop(outs)
-        return dec_out, dec_out + self.postprocess(dec_out), stop_pred.squeeze(2)
+        return dec_out, dec_out + self.postprocess(dec_out), stop_pred.squeeze(2), tgt_lens
 
     def forward(self, mel, mel_len, noise_in=False, teacher_ratio=1, ret_enc_hid=False):
         enc_outputs, masks = self.encode(mel, mel_len, noise_in)
@@ -368,7 +368,7 @@ class SpeechRNN(AutoEncoderNet):
             self.decoder.attention_layer.clear_memory()
 
         res = outputs + self.postprocess(outputs)
-        return outputs[:, 1:, :], res[:, 1:, :], stops[:, 1:]
+        return outputs[:, 1:, :], res[:, 1:, :], stops[:, 1:], target_len
 
     def decode(self, input_, hidden_state, enc_output, enc_ctxt_mask):
         """
@@ -390,7 +390,7 @@ class SpeechRNN(AutoEncoderNet):
 
     def forward(self, mel, mel_len, noise_in=False, ret_enc_hid=False, teacher_ratio=1):
         encoder_outputs, pad_mask = self.encode(mel, mel_len, noise_in=noise_in)
-        pre_pred, post_pred, stop_pred = self.decode_sequence(mel, mel_len, encoder_outputs, pad_mask, teacher_ratio)
+        pre_pred, post_pred, stop_pred, stop_lens = self.decode_sequence(mel, mel_len, encoder_outputs, pad_mask, teacher_ratio)
         if ret_enc_hid:
             return pre_pred, post_pred, stop_pred, encoder_outputs[0]
         return pre_pred, post_pred, stop_pred

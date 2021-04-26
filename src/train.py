@@ -118,7 +118,7 @@ def speech_loss(gold_mel, stop_label, pred_mel, post_pred_mel, mel_len, stop_pre
     stop_weight = torch.where(stop_label.eq(1),
                               torch.tensor(eos_weight).to(DEVICE),
                               torch.ones(1, device=DEVICE))
-    stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(), stop_label, pos_weight=stop_weight)
+    stop_loss = F.binary_cross_entropy_with_logits(stop_pred.squeeze(-1), stop_label, pos_weight=stop_weight)
     return pred_loss + post_pred_loss + stop_loss
 
 def cross_entropy(input, target, size_average=True):
@@ -240,14 +240,14 @@ def supervised_step(model, batch, args, use_dis_loss=False):
 
     mel_aug = specaugment(mel, mel_len)
     if use_dis_loss:
-        pre_pred, post_pred, stop_pred, t_hid = model.tts(text, text_len, mel, mel_len, ret_enc_hid=use_dis_loss)
+        pre_pred, post_pred, stop_pred, stop_lens, t_hid = model.tts(text, text_len, mel, mel_len, ret_enc_hid=use_dis_loss)
         t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech', freeze_discriminator=True)
 
         text_pred, s_hid = model.asr(text, text_len, mel_aug, mel_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
         s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text', freeze_discriminator=True)
     else:
-        pre_pred, post_pred, stop_pred = model.tts(text, text_len, mel, mel_len)
+        pre_pred, post_pred, stop_pred, stop_lens = model.tts(text, text_len, mel, mel_len)
         text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
 
     tts_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
@@ -341,7 +341,10 @@ def discriminator_step(model, batch):
 
 
 #####---- Use these to train on a task -----#####
-def optimizer_step(model, optimizer, args):
+def optimizer_step(model, optimizer, step, args):
+    # Log to tensorboard
+    if WRITER:
+        WRITER.add_scalar('train/learning_rate', optimizer.param_groups[0]['lr'], step)
 
     # Take a optimizer step!
     if args.grad_clip > 0.0:
@@ -492,11 +495,11 @@ def evaluate(model, valid_dataloader):
             losses['t_cm'].append(t_cm_loss.detach().item())
 
             text_pred, text_pred_len = model.asr(None, None, mel, mel_len, infer=True)
-            per += compute_per(text, text_pred.squeeze(), text_len, text_pred_len)
+            per += compute_per(text, text_pred.squeeze(-1), text_len, text_pred_len)
             n_iters += 1
 
-    # TODO: evaluate speech inference somehow?
-    compare_outputs(text[-1][:], text_pred[-1][:], text_len[-1], text_pred_len[-1])
+        # TODO: evaluate speech inference somehow?
+        compare_outputs(text[-1][:], text_pred[-1][:], text_len[-1], text_pred_len[-1])
     return per/n_iters, losses
 
 def train(args):
@@ -566,7 +569,8 @@ def train(args):
                 train_sp_step(losses, model, batch, step, accum_steps, args)
 
             # Gradients have accumulated - lets back prop and free memory
-            optimizer_step(model, optimizer, args)
+            step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps
+            optimizer_step(model, optimizer, step, args)
 
             # DISCRIMINATOR
             if args.use_discriminator:
@@ -625,17 +629,34 @@ def train(args):
 
 
 def log_tb_example(model, ex, step, name="train"):
+    """
+    Log example of model output to tensorboard
+    params
+        - model: the ASR/TTS model
+        - ex: an input example from LJSpeech
+        - step: tensorboard global step
+    """
     model.eval()
-    if WRITER:
-        ex_mel = torch.tensor(ex["mel"]).unsqueeze(0)
-        ex_text = torch.LongTensor(ex["text"]).unsqueeze(0)
-        text_pred = model.asr(None, ex_mel.to(DEVICE), infer=True).squeeze(dim=0).detach().cpu().numpy()
-        speech_pred, speech_stop_pred = model.tts(ex_text.to(DEVICE), None, infer=True)
-        speech_pred = speech_pred.squeeze(dim=0).detach().cpu().numpy()
-        WRITER.add_text(f"{name}/text_gold", sequence_to_text(ex["text"]), step)
-        WRITER.add_text(f"{name}/text_pred", sequence_to_text(text_pred), step)
-        WRITER.add_image(f"{name}/speech_gold", np.flip(ex["mel"].transpose(), axis=0), step, dataformats="HW")
-        WRITER.add_image(f"{name}/speech_pred", np.flip(speech_pred.transpose(), axis=0), step, dataformats="HW")
+    with torch.no_grad():
+        if WRITER:
+            # Convert input to tensor
+            ex_mel = torch.tensor(ex["mel"]).unsqueeze(0)
+            ex_text = torch.LongTensor(ex["text"]).unsqueeze(0)
+            ex_text_len = torch.as_tensor(ex["text_length"], dtype=torch.long).unsqueeze(0)
+            ex_mel_len = torch.as_tensor(ex["mel_length"], dtype=torch.long).unsqueeze(0)
+
+            # Get output
+            text_pred, text_pred_len = model.asr(None, None, ex_mel.to(DEVICE), ex_mel_len.to(DEVICE), infer=True)
+            text_pred = text_pred.squeeze(dim=0).detach().cpu().numpy()
+            text_pred_len = text_pred_len.squeeze(dim=0).detach().cpu().item()
+            _, speech_pred, _, speech_pred_len = model.tts(ex_text.to(DEVICE), ex_text_len.to(DEVICE), None, None, infer=True)
+            speech_pred = speech_pred.squeeze(dim=0).detach().cpu().numpy()
+            speech_pred_len = speech_pred_len.squeeze(dim=0).detach().cpu().item()
+
+            WRITER.add_text(f"{name}/text_gold", sequence_to_text(ex["text"][:ex_text_len]), step)
+            WRITER.add_text(f"{name}/text_pred", sequence_to_text(text_pred[:text_pred_len]), step)
+            WRITER.add_image(f"{name}/speech_gold", np.flip(ex["mel"][:ex_mel_len].transpose(), axis=0), step, dataformats="HW")
+            WRITER.add_image(f"{name}/speech_pred", np.flip(speech_pred[:speech_pred_len].transpose(), axis=0), step, dataformats="HW")
 
 
 def log_loss_metrics(losses, epoch, eval=False):
@@ -777,6 +798,13 @@ def initialize_datasets(args):
     unsupervised_train_dataset = get_dataset('unlabeled_train.csv')
     val_dataset = get_dataset('val.csv')
     full_train_dataset = get_dataset('full_train.csv')
+
+    # TODO: remove the subsets used for experimentation
+    #supervised_train_dataset = torch.utils.data.Subset(supervised_train_dataset, range(100))
+    #unsupervised_train_dataset = torch.utils.data.Subset(unsupervised_train_dataset, range(100))
+    #val_dataset = torch.utils.data.Subset(val_dataset, range(100))
+    #full_train_dataset = torch.utils.data.Subset(full_train_dataset, range(100))
+
     return supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset
 
 
