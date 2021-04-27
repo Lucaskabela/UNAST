@@ -108,10 +108,7 @@ class UNAST(nn.Module):
         text_pred = self.text_m.decode_sequence(text, text_len, cm_s_e_o, cm_mask,
             teacher_ratio=1)
         if ret_enc_hid:
-            cm_s_hid = cm_s_e_o
-            if len(cm_s_hid) == 2:
-                cm_s_hid = cm_s_hid[0]
-            return text_pred, cm_s_hid
+            return text_pred, cm_s_e_o, pred_lens
         return text_pred
 
     def cm_speech_in(self, mel, mel_len, ret_enc_hid=False):
@@ -122,10 +119,7 @@ class UNAST(nn.Module):
         pre_pred, post_pred, stop_pred, stop_lens = self.speech_m.decode_sequence(mel, mel_len, cm_t_e_o,
             cm_t_masks, teacher_ratio=1)
         if ret_enc_hid:
-            cm_t_hid = cm_t_e_o
-            if len(cm_t_hid) == 2:
-                cm_t_hid = cm_t_hid[0]
-            return pre_pred, post_pred, stop_pred, cm_t_hid
+            return pre_pred, post_pred, stop_pred, cm_t_e_o, text_pred_len
         return pre_pred, post_pred, stop_pred
 
     def tts(self, text, text_len, mel, mel_len, infer=False, ret_enc_hid=False):
@@ -136,10 +130,7 @@ class UNAST(nn.Module):
         else:
             pre_pred, post_pred, stop_pred, stop_lens = self.speech_m.infer_sequence(t_e_o, t_masks)
         if ret_enc_hid:
-            t_hid = t_e_o
-            if len(t_hid) == 2:
-                t_hid = t_hid[0]
-            return pre_pred, post_pred, stop_pred, stop_lens, t_hid
+            return pre_pred, post_pred, stop_pred, stop_lens, t_e_o
         return pre_pred, post_pred, stop_pred, stop_lens
 
     def asr(self, text, text_len, mel, mel_len, infer=False, ret_enc_hid=False):
@@ -150,10 +141,7 @@ class UNAST(nn.Module):
         else:
             text_pred = self.text_m.infer_sequence(s_e_o, s_masks)
         if ret_enc_hid:
-            s_hid = s_e_o
-            if len(s_hid) == 2:
-                s_hid = s_hid[0]
-            return text_pred, s_hid
+            return text_pred, s_e_o
         return text_pred
 
     def num_params(self):
@@ -166,7 +154,7 @@ class UNAST(nn.Module):
 class Discriminator(nn.Module):
     # From Lample et al.
     # "3 hidden layers, 1024 hidden layers, smoothing coefficient 0.1"
-    def __init__(self, enc_dim, hidden=1024, out_classes=2, dropout=.2, relu=.2):
+    def __init__(self, enc_dim, hidden=1024, out_classes=1, dropout=.2, relu=.2):
         super(Discriminator, self).__init__()
         self.fc1 = nn.Linear(enc_dim, hidden)
         self.fc2 = nn.Linear(hidden, hidden)
@@ -179,7 +167,23 @@ class Discriminator(nn.Module):
         temp = self.dropout(self.non_linear(self.fc1(enc_output)))
         temp2 = self.dropout(self.non_linear(self.fc2(temp)))
         temp3 = self.dropout(self.non_linear(self.fc3(temp2)))
-        return self.fc4(temp3)
+        return self.fc4(temp3).squeeze(dim=-1)
+
+class LSTMDiscriminator(nn.Module):
+    def __init__(self, d_in, hidden, out=1, bidirectional=False, num_layers=1, dropout=.2, relu=.2):
+        super(LSTMDiscriminator, self).__init__()
+        self.num_dir = 2 if bidirectional else 1
+        self.num_layers=num_layers
+        self.hidden = hidden
+        self.rnn = RNNEncoder(d_in, hidden, bidirectional=bidirectional, num_layers=num_layers, dropout=dropout)
+        self.dropout = nn.Dropout(p=dropout)
+        self.non_linear = nn.LeakyReLU(relu)
+        self.fc2 = nn.Linear(hidden, out)
+
+    def forward(self, out, out_len):
+        _, (e_h, _) = self.rnn(out, out_len)
+        # -1 gets topmost layer I think
+        return self.fc2(self.dropout(self.non_linear(e_h[-1]))).squeeze(dim=-1)
 
 class SpeechTransformer(AutoEncoderNet):
 
@@ -394,7 +398,7 @@ class SpeechRNN(AutoEncoderNet):
         encoder_outputs, pad_mask = self.encode(mel, mel_len, noise_in=noise_in)
         pre_pred, post_pred, stop_pred, stop_lens = self.decode_sequence(mel, mel_len, encoder_outputs, pad_mask, teacher_ratio=1)
         if ret_enc_hid:
-            return pre_pred, post_pred, stop_pred, encoder_outputs[0]
+            return pre_pred, post_pred, stop_pred, encoder_outputs
         return pre_pred, post_pred, stop_pred
 
 def generate_square_subsequent_mask(sz, DEVICE):
@@ -613,5 +617,5 @@ class TextRNN(AutoEncoderNet):
         encoder_outputs, pad_mask = self.encode(text, text_len, noise_in=noise_in)
         pred = self.decode_sequence(text, text_len, encoder_outputs, pad_mask, teacher_ratio=1)
         if ret_enc_hid:
-            return pred, encoder_outputs[0]
+            return pred, encoder_outputs
         return pred
