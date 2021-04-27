@@ -99,7 +99,8 @@ def collate_fn_transformer(batch):
 
         # return t.LongTensor(text), t.FloatTensor(mel), t.FloatTensor(mel_input), t.LongTensor(pos_text), t.LongTensor(pos_mel), t.LongTensor(text_length)
 
-        return t.LongTensor(text), t.FloatTensor(mel), t.LongTensor(text_length), t.LongTensor(mel_length)
+        return t.as_tensor(text, dtype=t.long), t.as_tensor(mel, dtype=t.float), \
+            t.as_tensor(text_length, dtype=t.long), t.as_tensor(mel_length, dtype=t.long)
 
     raise TypeError(("batch must contain tensors, numbers, dicts or lists; found {}"
                      .format(type(batch[0]))))
@@ -116,7 +117,7 @@ def collate_fn_postnet(batch):
         mel = _pad_mel(mel)
         mag = _pad_mel(mag)
 
-        return t.FloatTensor(mel), t.FloatTensor(mag)
+        return t.as_tensor(mel, dtype=t.float), t.as_tensor(mag, dtype=t.float)
 
     raise TypeError(("batch must contain tensors, numbers, dicts or lists; found {}"
                      .format(type(batch[0]))))
