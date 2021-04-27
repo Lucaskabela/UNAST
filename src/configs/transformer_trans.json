@@ -42,7 +42,7 @@
     "s_eos_weight": 5.0,
     "t_eos_weight": 1.0,
     "num_workers": 4,
-    "load_path": null,
+    "load_path": "./checkpoint/transformer_b4_a4_trans/model_most_recent.ckpt",
     "save_every": 10,
     "use_gpu": true,
     "optim_type": "adamw",
