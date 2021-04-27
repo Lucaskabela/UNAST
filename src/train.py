@@ -143,23 +143,23 @@ def cross_entropy(input, target, size_average=True):
 def discriminator_loss(output, target):
     return cross_entropy(output, target)
 
-def discriminator_target(output, target_type, smoothing=0.1):
+def discriminator_target(batch_size, target_type, smoothing=0.1):
     """
     Create the target labels with smoothing
     Params
-        -output : [batch_size x 2]
+        -batch_size : batch size
         -type : 'text' or 'speech'
         -smoothing : label smoothing factor
     Return
         [batch_size x 2] tensor with target smoothed labels
     """
-    target = torch.zeros_like(output)
+    target = torch.empty(batch_size, 2)
     if target_type == 'text':
         smoothed_target_label = [1 - smoothing, smoothing]
     else:
         # target_type == 'speech' implicitly
         smoothed_target_label = [smoothing, 1 - smoothing]
-    smoothed_target_label = torch.as_tensor(smoothed_target_label).to(target)
+    smoothed_target_label = torch.as_tensor(smoothed_target_label)
     target[:,] = smoothed_target_label
     return target
 
@@ -207,10 +207,10 @@ def autoencoder_step(model, batch, args, use_dis_loss=False):
     if use_dis_loss:
         text_pred, t_hid = model.text_ae(text, text_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
-        t_d_loss = discriminator_hidden_to_loss(model, t_hid, text_len, 'speech', args.model_type, freeze_discriminator=True)
-
         pre_pred, post_pred, stop_pred, s_hid = model.speech_ae(mel, mel_len, ret_enc_hid=use_dis_loss)
-        s_d_loss = discriminator_hidden_to_loss(model, s_hid, mel_len, 'text', args.model_type, freeze_discriminator=True)
+
+        d_batch = discriminator_shuffle_batch(t_hid, text_len, s_hid, mel_len, args.model_type)
+        d_ae_loss = discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=True)
     else:
         text_pred = model.text_ae(text, text_len).permute(0, 2, 1)
         pre_pred, post_pred, stop_pred = model.speech_ae(mel, mel_len)
@@ -222,11 +222,10 @@ def autoencoder_step(model, batch, args, use_dis_loss=False):
     check_nan_loss(model, t_ae_loss, "ae_text_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
     check_nan_loss(model, s_ae_loss, "ae_speech_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
     if use_dis_loss:
-        check_nan_loss(model, t_d_loss, "ae_text_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
-        check_nan_loss(model, s_d_loss, "ae_speech_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+        check_nan_loss(model, d_ae_loss, "ae_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
 
     if use_dis_loss:
-        return t_ae_loss, s_ae_loss, t_d_loss, s_d_loss
+        return t_ae_loss, s_ae_loss, d_ae_loss
     return t_ae_loss, s_ae_loss
 
 def supervised_step(model, batch, args, use_dis_loss=False):
@@ -237,11 +236,11 @@ def supervised_step(model, batch, args, use_dis_loss=False):
     mel_aug = specaugment(mel, mel_len)
     if use_dis_loss:
         pre_pred, post_pred, stop_pred, stop_lens, t_hid = model.tts(text, text_len, mel, mel_len, ret_enc_hid=use_dis_loss)
-        t_d_loss = discriminator_hidden_to_loss(model, t_hid, text_len, 'speech', args.model_type, freeze_discriminator=True)
-
         text_pred, s_hid = model.asr(text, text_len, mel_aug, mel_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
-        s_d_loss = discriminator_hidden_to_loss(model, s_hid, mel_len, 'text', args.model_type, freeze_discriminator=True)
+
+        d_batch = discriminator_shuffle_batch(t_hid, text_len, s_hid, mel_len, args.model_type)
+        d_sp_loss = discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=True)
     else:
         pre_pred, post_pred, stop_pred, stop_lens = model.tts(text, text_len, mel, mel_len)
         text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
@@ -253,11 +252,10 @@ def supervised_step(model, batch, args, use_dis_loss=False):
     check_nan_loss(model, asr_loss, "sp_asr_loss", None, text_pred, mel_aug, None, None, None)
     check_nan_loss(model, tts_loss, "sp_tts_loss", text, None, None, post_pred, None, stop_pred)
     if use_dis_loss:
-        check_nan_loss(model, t_d_loss, "sp_text_dis_loss", None, text_pred, mel_aug, None, None, None)
-        check_nan_loss(model, s_d_loss, "sp_speech_dis_loss", text, None, None, post_pred, None, stop_pred)
+        check_nan_loss(model, d_sp_loss, "sp_dis_loss", text, text_pred, mel_aug, post_pred, gold_stop, stop_pred)
 
     if use_dis_loss:
-        return asr_loss, tts_loss, t_d_loss, s_d_loss
+        return asr_loss, tts_loss, d_sp_loss
     return asr_loss, tts_loss
 
 def crossmodel_step(model, batch, args, use_dis_loss=False):
@@ -269,7 +267,6 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
     # Do speech!
     if use_dis_loss:
         pre_pred, post_pred, stop_pred, cm_t_hid, cm_t_len = model.cm_speech_in(mel, mel_len, ret_enc_hid=use_dis_loss)
-        cm_t_d_loss = discriminator_hidden_to_loss(model, cm_t_hid, cm_t_len, 'speech', args.model_type, freeze_discriminator=True)
     else:
         pre_pred, post_pred, stop_pred = model.cm_speech_in(mel, mel_len)
     s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
@@ -278,57 +275,96 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
     if use_dis_loss:
         text_pred, cm_s_hid, cm_s_len = model.cm_text_in(text, text_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
-        cm_s_d_loss = discriminator_hidden_to_loss(model, cm_s_hid, cm_s_len, 'text', args.model_type, freeze_discriminator=True)
     else:
         text_pred = model.cm_text_in(text, text_len).permute(0, 2, 1)
     t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
+
+    if use_dis_loss:
+        d_batch = discriminator_shuffle_batch(cm_t_hid, cm_t_len, cm_s_hid, cm_s_len, args.model_type)
+        d_cm_loss = discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=True)
 
     # Check loss is not NaN
     check_nan_loss(model, t_cm_loss, "cm_text_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
     check_nan_loss(model, s_cm_loss, "cm_speech_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
     if use_dis_loss:
-        check_nan_loss(model, cm_t_d_loss, "cm_text_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
-        check_nan_loss(model, cm_s_d_loss, "cm_speech_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
+        check_nan_loss(model, d_cm_loss, "cm_dis_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
 
     if use_dis_loss:
-        return t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss
+        return t_cm_loss, s_cm_loss, d_cm_loss
     return t_cm_loss, s_cm_loss
 
-def discriminator_hidden_to_loss(model, hid, hid_len, target_type, model_type, freeze_discriminator=False):
+def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type):
     if model_type == 'rnn':
-        _, out = hid
+        _, t_out = t_hid
+        _, s_out = s_hid
     else:
-        out = hid
+        t_out = t_hid
+        s_out = s_hid
+
+    # Construct targets
+    t_target = discriminator_target(t_out.shape[0], 'text').to(t_out)
+    s_target = discriminator_target(s_out.shape[0], 'speech').to(s_out)
+
+    # Pad both hidden states' sequence length with PAD_IDX to match dims
+    # Note: F.pad is nondeterministic in backward pass when used with CUDA,
+    #       but this should be ignored with pack_padded_sequence()?
+    t_seq_dim = t_out.shape[1]
+    s_seq_dim = s_out.shape[1]
+    if t_seq_dim < s_seq_dim:
+        t_out = F.pad(t_out, (0, 0, 0, s_seq_dim - t_seq_dim), "constant", PAD_IDX)
+    if s_seq_dim < t_seq_dim:
+        s_out = F.pad(s_out, (0, 0, 0, t_seq_dim - s_seq_dim), "constant", PAD_IDX)
+
+    # Concatenate
+    d_hid = torch.cat([t_out, s_out], dim=0)
+    d_len = torch.cat([t_hid_len, s_hid_len], dim=0)
+    d_target = torch.cat([t_target, s_target], dim=0)
+
+    # Shuffle
+    indices = torch.randperm(d_hid.shape[0])
+    d_hid = d_hid[indices]
+    d_len = d_len[indices]
+    d_target = d_target[indices]
+
+    # Split
+    d_hid = torch.split(d_hid, [t_out.shape[0], s_out.shape[0]])
+    d_len = torch.split(d_len, [t_out.shape[0], s_out.shape[0]])
+    d_target = torch.split(d_target, [t_out.shape[0], s_out.shape[0]])
+
+    d_batch = list(zip(d_hid, d_len, d_target))
+    return d_batch
+
+def discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=False):
+    d_loss = 0
     if freeze_discriminator:
         with torch.no_grad():
-            d_out = model.discriminator(out, hid_len)
+            for d_hid, d_len, d_target in d_batch:
+                d_out = model.discriminator(d_hid, d_len)
+                d_loss += discriminator_loss(d_out, d_target)
     else:
-        d_out = model.discriminator(out, hid_len)
-    target = discriminator_target(d_out, target_type)
-    d_loss = discriminator_loss(d_out, target)
+        for d_hid, d_len, d_target in d_batch:
+            d_out = model.discriminator(d_hid, d_len)
+            d_loss += discriminator_loss(d_out, d_target)
     return d_loss
 
 def discriminator_step(model, batch, args):
-    x, _ = process_batch(batch)
+    x, _ = batch
     text, mel, text_len, mel_len = x
 
-    # text
+    # text and speech encoded representations
     with torch.no_grad():
         t_enc_out, _ = model.text_m.encode(text, text_len)
+        s_enc_out, _ = model.speech_m.encode(mel, mel_len)
+
     # quick check to determine between rnn and transformer
     # eventually should be built into the RNN and Transformer Encoder classes
-    t_d_loss = discriminator_hidden_to_loss(model, t_enc_out, text_len, 'text', args.model_type)
-
-    # speech
-    with torch.no_grad():
-        s_enc_out, _ = model.speech_m.encode(mel, mel_len)
-    s_d_loss = discriminator_hidden_to_loss(model, s_enc_out, mel_len, 'speech', args.model_type)
+    d_batch = discriminator_shuffle_batch(t_enc_out, text_len, s_enc_out, mel_len, args.model_type)
+    d_loss = discriminator_hidden_to_loss(model, d_batch)
 
     # Check loss is not NaN
-    check_nan_loss(model, t_d_loss, "dis_text_loss", text, None, mel, None, None, None)
-    check_nan_loss(model, s_d_loss, "dis_speech_loss", text, None, mel, None, None, None)
+    check_nan_loss(model, d_loss, "dis_loss", text, None, mel, None, None, None)
 
-    return t_d_loss, s_d_loss
+    return d_loss
 
 
 #####---- Use these to train on a task -----#####
@@ -342,8 +378,8 @@ def optimizer_step(model, optimizer, args):
 def train_sp_step(losses, model, batch, step, accum_steps, args):
     batch = process_batch(batch)
     if args.use_discriminator:
-        asr_loss, tts_loss, t_d_loss, s_d_loss = supervised_step(model, batch, args, args.use_discriminator)
-        loss = tts_loss + asr_loss + t_d_loss + s_d_loss
+        asr_loss, tts_loss, d_sp_loss = supervised_step(model, batch, args, args.use_discriminator)
+        loss = tts_loss + asr_loss + d_sp_loss
     else:
         asr_loss, tts_loss = supervised_step(model, batch, args)
         loss = tts_loss + asr_loss
@@ -355,24 +391,22 @@ def train_sp_step(losses, model, batch, step, accum_steps, args):
     losses['asr_'].append(asr_loss.detach().cpu().item())
     losses['tts_'].append(tts_loss.detach().cpu().item())
     if args.use_discriminator:
-        losses['t_sp_d'].append(t_d_loss.detach().cpu().item())
-        losses['s_sp_d'].append(s_d_loss.detach().cpu().item())
+        losses['sp_d'].append(d_sp_loss.detach().cpu().item())
 
     # Log to tensorboard
     if WRITER:
         WRITER.add_scalar('train/sp_asr_loss', asr_loss.detach().cpu().item(), step)
         WRITER.add_scalar('train/sp_tts_loss', tts_loss.detach().cpu().item(), step)
         if args.use_discriminator:
-            WRITER.add_scalar('train/sp_t_dis_loss', t_d_loss.detach().cpu().item(), step)
-            WRITER.add_scalar('train/sp_s_dis_loss', s_d_loss.detach().cpu().item(), step)
+            WRITER.add_scalar('train/sp_dis_loss', d_sp_loss.detach().cpu().item(), step)
 
     return loss
 
 def train_ae_step(losses, model, batch, step, accum_steps, args):
     batch = process_batch(batch)
     if args.use_discriminator:
-        t_ae_loss, s_ae_loss, t_d_loss, s_d_loss = autoencoder_step(model, batch, args, args.use_discriminator)
-        loss = t_ae_loss + s_ae_loss + t_d_loss + s_d_loss
+        t_ae_loss, s_ae_loss, d_ae_loss = autoencoder_step(model, batch, args, args.use_discriminator)
+        loss = t_ae_loss + s_ae_loss + d_ae_loss
     else:
         t_ae_loss, s_ae_loss = autoencoder_step(model, batch, args)
         loss = t_ae_loss + s_ae_loss
@@ -383,16 +417,14 @@ def train_ae_step(losses, model, batch, step, accum_steps, args):
     losses['t_ae'].append(t_ae_loss.detach().cpu().item())
     losses['s_ae'].append(s_ae_loss.detach().cpu().item())
     if args.use_discriminator:
-        losses['t_ae_d'].append(t_d_loss.detach().cpu().item())
-        losses['s_ae_d'].append(s_d_loss.detach().cpu().item())
+        losses['d_ae'].append(d_ae_loss.detach().cpu().item())
 
     # Log to tensorboard
     if WRITER:
         WRITER.add_scalar('train/ae_t_loss', t_ae_loss.detach().cpu().item(), step)
         WRITER.add_scalar('train/ae_s_loss', s_ae_loss.detach().cpu().item(), step)
         if args.use_discriminator:
-            WRITER.add_scalar('train/ae_t_dis_loss', t_d_loss.detach().cpu().item(), step)
-            WRITER.add_scalar('train/ae_s_dis_loss', s_d_loss.detach().cpu().item(), step)
+            WRITER.add_scalar('train/ae_d_loss', d_ae_loss.detach().cpu().item(), step)
 
     return loss
 
@@ -401,8 +433,8 @@ def train_cm_step(losses, model, batch, step, accum_steps, args):
     batch = process_batch(batch)
 
     if args.use_discriminator:
-        t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss = crossmodel_step(model, batch, args, args.use_discriminator)
-        loss = s_cm_loss + t_cm_loss + cm_t_d_loss + cm_s_d_loss
+        t_cm_loss, s_cm_loss, d_cm_loss = crossmodel_step(model, batch, args, args.use_discriminator)
+        loss = s_cm_loss + t_cm_loss + d_cm_loss
     else:
         t_cm_loss, s_cm_loss = crossmodel_step(model, batch, args)
         loss = s_cm_loss + t_cm_loss
@@ -413,33 +445,30 @@ def train_cm_step(losses, model, batch, step, accum_steps, args):
     losses['s_cm'].append(s_cm_loss.detach().cpu().item())
     losses['t_cm'].append(t_cm_loss.detach().cpu().item())
     if args.use_discriminator:
-        losses['cm_s_cm_d'].append(cm_s_d_loss.detach().cpu().item())
-        losses['cm_t_cm_d'].append(cm_t_d_loss.detach().cpu().item())
+        losses['d_cm'].append(d_cm_loss.detach().cpu().item())
 
     # Log to tensorboard
     if WRITER:
         WRITER.add_scalar('train/cm_t_loss', t_cm_loss.detach().cpu().item(), step)
         WRITER.add_scalar('train/cm_s_loss', s_cm_loss.detach().cpu().item(), step)
         if args.use_discriminator:
-            WRITER.add_scalar('train/cm_t_dis_loss', cm_t_d_loss.detach().cpu().item(), step)
-            WRITER.add_scalar('train/cm_s_dis_loss', cm_s_d_loss.detach().cpu().item(), step)
+            WRITER.add_scalar('train/cm_d_loss', d_cm_loss.detach().cpu().item(), step)
 
     return loss
 
 def train_discriminator_step(losses, model, batch, step, accum_steps, args):
-    t_d_loss, s_d_loss = discriminator_step(model, batch, args)
+    batch = process_batch(batch)
+    d_loss = discriminator_step(model, batch, args)
 
-    loss = (t_d_loss + s_d_loss) / accum_steps
+    loss = d_loss / accum_steps
     loss.backward()
 
     # Log losses
-    losses['t_d'].append(t_d_loss.detach().cpu().item())
-    losses['s_d'].append(s_d_loss.detach().cpu().item())
+    losses['d'].append(d_loss.detach().cpu().item())
 
     # Log to tensorboard
     if WRITER:
-        WRITER.add_scalar('train/dis_text_loss', t_d_loss.detach().cpu().item(), step)
-        WRITER.add_scalar('train/dis_speech_loss', s_d_loss.detach().cpu().item(), step)
+        WRITER.add_scalar('train/dis_loss', d_loss.detach().cpu().item(), step)
 
     return loss
 
@@ -452,7 +481,7 @@ def unfreeze_model_parameters(model):
         param.requires_grad = True
 
 #####----- Train and evaluate -----#####
-def evaluate(model, valid_dataloader):
+def evaluate(model, valid_dataloader, args):
     """
         Expect validation set to have paired speech & text!
         Primary evaluation is PER - can gauge training by the other losses
@@ -469,17 +498,36 @@ def evaluate(model, valid_dataloader):
             x, _ = batch
             text, mel, text_len, mel_len = x
 
-            t_ae_loss, s_ae_loss = autoencoder_step(model, batch, args)
+            if args.use_discriminator:
+                t_ae_loss, s_ae_loss, d_ae_loss = autoencoder_step(model, batch, args, args.use_discriminator)
+            else:
+                t_ae_loss, s_ae_loss = autoencoder_step(model, batch, args)
             losses['t_ae'].append(t_ae_loss.detach().item())
             losses['s_ae'].append(s_ae_loss.detach().item())
+            if args.use_discriminator:
+                losses['d_ae'].append(d_ae_loss.detach().item())
 
-            asr_loss, tts_loss = supervised_step(model, batch, args)
-            losses['asr_'].append(asr_loss.detach().item())
-            losses['tts_'].append(tts_loss.detach().item())
+            if args.use_discriminator:
+                asr_loss, tts_loss, d_sp_loss = supervised_step(model, batch, args, args.use_discriminator)
+            else:
+                asr_loss, tts_loss = supervised_step(model, batch, args)
+            losses['asr'].append(asr_loss.detach().item())
+            losses['tts'].append(tts_loss.detach().item())
+            if args.use_discriminator:
+                losses['d_sp'].append(d_sp_loss.detach().item())
 
-            t_cm_loss, s_cm_loss = crossmodel_step(model, batch, args)
+            if args.use_discriminator:
+                t_cm_loss, s_cm_loss, d_cm_loss = crossmodel_step(model, batch, args, args.use_discriminator)
+            else:
+                t_cm_loss, s_cm_loss = crossmodel_step(model, batch, args)
             losses['s_cm'].append(s_cm_loss.detach().item())
             losses['t_cm'].append(t_cm_loss.detach().item())
+            if args.use_discriminator:
+                losses['d_cm'].append(d_cm_loss.detach().item())
+
+            if args.use_discriminator:
+                d_loss = discriminator_step(model, batch, args)
+                losses['dis'].append(d_loss.detach().item())
 
             text_pred, text_pred_len = model.asr(None, None, mel, mel_len, infer=True)
             per += compute_per(text, text_pred.squeeze(-1), text_len, text_pred_len)
@@ -511,7 +559,7 @@ def train(args):
     s_epoch, best, model, optimizer, scheduler = initialize_model(args)
 
     print("Training model with {} parameters".format(model.num_params()))
-    per, eval_losses = evaluate(model, valid_dataloader)
+    per, eval_losses = evaluate(model, valid_dataloader, args)
     log_loss_metrics(eval_losses, -1, eval=True)
 
     max_obj_steps = max(args.ae_steps, args.cm_steps, args.sp_steps)
@@ -590,7 +638,7 @@ def train(args):
                 log_tb_example(model, ex, step)
 
         # Eval and save
-        per, eval_losses = evaluate(model, valid_dataloader)
+        per, eval_losses = evaluate(model, valid_dataloader, args)
         log_loss_metrics(losses, epoch)
         log_loss_metrics(eval_losses, epoch, eval=True)
 
