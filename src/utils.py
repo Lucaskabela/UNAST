@@ -2,7 +2,7 @@
 Contains any and all code we didnt want to put somewhere else
 '''
 import torch
-import numpy as np 
+import numpy as np
 import random
 import librosa
 import audio_parameters as ap
@@ -28,7 +28,7 @@ def compute_per(ground_truth, hypothesis, ground_truth_lengths, hypothesis_lengt
     for b in range(ground_truth.shape[0]):
         gt_sents.append(' '.join(map(str, ground_truth[b][:].tolist()[:ground_truth_lengths[b]])))
         hyp_sents.append(' '.join(map(str, hypothesis[b][:].tolist()[:hypothesis_lengths[b]])))
-        
+
     return wer(gt_sents, hyp_sents)
 
 def compare_outputs(ground_truth, hypothesis, gt_len, hyp_len):
@@ -76,7 +76,7 @@ def sent_lens_to_mask(lens, max_length):
     """
     lens should be tensor of dim [batch_size]
     """
-    m = [[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)] 
+    m = [[1 if j < lens.data[i].item() else 0 for j in range(0, max_length)]
         for i in range(0, lens.shape[0])]
     return torch.as_tensor(m, device=lens.device, dtype=torch.bool)
 
@@ -88,7 +88,7 @@ def set_seed(seed):
 
     Args:
         - seed: An integer seed for consistency in different runs
-    ''' 
+    '''
     torch.manual_seed(seed)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
@@ -118,7 +118,7 @@ class TeacherRatio():
         self.gamma = args.teacher_gamma
         self.start_step = args.teacher_decay_start
         self.stop_step = args.teacher_decay_end
-    
+
     def step(self):
         self.iter += 1
 
@@ -129,12 +129,12 @@ class TeacherRatio():
             return self.val * (self.gamma ** power)
         else:
             return self.val
-            
+
 def get_teacher_ratio(args):
     return TeacherRatio(args)
 
 # Next two methods courtesy of: https://towardsdatascience.com/how-to-save-and-load-a-model-in-pytorch-with-a-complete-example-c2920e617dee
-def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):
+def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path, epoch_save=False):
     """
     state: checkpoint we want to save.  State is a dict with keys:
             ['epoch','valid_loss_min', 'state_dict', 'optimizer']
@@ -153,8 +153,14 @@ def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):
     }
 
     # save checkpoint data to the path given, checkpoint_path
+    if epoch_save:
+        f_path = checkpoint_path + f'/model_{epoch}.ckpt'
+        torch.save(state, f_path)
+        return
+
     f_path = checkpoint_path + '/model_most_recent.ckpt'
     torch.save(state, f_path)
+
     # if it is a best model, min validation loss
     if is_best:
         best_fpath = checkpoint_path + '/model_best.ckpt'
@@ -165,12 +171,12 @@ def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path):
 def load_ckp(checkpoint_fpath, model, optimizer):
     """
     checkpoint_path: path to save checkpoint
-    model: model that we want to load checkpoint parameters into       
+    model: model that we want to load checkpoint parameters into
     optimizer: optimizer we defined in previous training
     """
     if not os.path.exists(checkpoint_fpath):
         raise Exception("There is no model at the desired checkpoint")
-    
+
     # load check point
     checkpoint = torch.load(checkpoint_fpath)
 
