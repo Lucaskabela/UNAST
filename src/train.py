@@ -8,7 +8,7 @@ Contains the code for training the encoder/decoders, including:
 from utils import *
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
-from network import TextRNN, SpeechRNN, TextTransformer, SpeechTransformer, UNAST, Discriminator
+from network import TextRNN, SpeechRNN, TextTransformer, SpeechTransformer, UNAST, Discriminator, LSTMDiscriminator
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 import audio_parameters as ap
@@ -295,16 +295,14 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
 
 def discriminator_hidden_to_loss(model, hid, target_type, model_type, freeze_discriminator=False):
     if model_type == 'rnn':
-        out, (hid_h, hid_c) = hid
-        hidden = (hid_h[-1:], hid_c[-1:])
+        _, out = hid
     else:
         out = hid
-        hidden = None
     if freeze_discriminator:
         with torch.no_grad():
-            d_out = model.discriminator(out, hidden)
+            d_out = model.discriminator(out)
     else:
-        d_out = model.discriminator(out, hidden)
+        d_out = model.discriminator(out)
     target = discriminator_target(d_out, target_type)
     d_loss = discriminator_loss(d_out, target)
     return d_loss
@@ -813,7 +811,8 @@ def initialize_model(args):
         speech_m = SpeechTransformer(args)
 
     if args.use_discriminator:
-        discriminator = LSTMDiscriminator(args.hidden, args.disc_hid, bidirectional=args.disc_bidirectional)
+        discriminator_in_dim = args.hidden * 2 if args.model_type == 'rnn' else args.hidden
+        discriminator = LSTMDiscriminator(discriminator_in_dim, args.disc_hid, bidirectional=args.disc_bidirectional)
     model = UNAST(text_m, speech_m, discriminator, teacher).to(DEVICE)
 
     # initialize optimizer

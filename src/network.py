@@ -177,11 +177,8 @@ class LSTMDiscriminator(nn.Module):
         #self.dropout = nn.Dropout(p=dropout)
         #self.non_linear = nn.LeakyReLU(relu)
 
-    def forward(self, out, hid=None):
-        if hid is None:
-            _, (e_h, _) = self.rnn(out)
-        else:
-            _, (e_h, _) = self.rnn(out, hid)
+    def forward(self, out):
+        _, (e_h, _) = self.rnn(out)
         #temp = self.dropout(self.non_linear(self.fc1(enc_output)))
         #temp2 = self.dropout(self.non_linear(self.fc2(temp)))
         #temp3 = self.dropout(self.non_linear(self.fc3(temp2)))

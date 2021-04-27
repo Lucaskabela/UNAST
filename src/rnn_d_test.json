@@ -45,6 +45,8 @@
     "num_workers": 4,
     "load_path": null,
     "use_discriminator": true,
+    "disc_hid": 32,
+    "disc_bidirectional": true,
     "use_gpu": true,
     "optim_type": "adamw",
     "model_type": "rnn"
