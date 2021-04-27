@@ -206,10 +206,10 @@ def autoencoder_step(model, batch, args, use_dis_loss=False):
     if use_dis_loss:
         text_pred, t_hid = model.text_ae(text, text_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
-        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech', freeze_discriminator=True)
+        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech', args.model_type, freeze_discriminator=True)
 
         pre_pred, post_pred, stop_pred, s_hid = model.speech_ae(mel, mel_len, ret_enc_hid=use_dis_loss)
-        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text', freeze_discriminator=True)
+        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text', args.model_type, freeze_discriminator=True)
     else:
         text_pred = model.text_ae(text, text_len).permute(0, 2, 1)
         pre_pred, post_pred, stop_pred = model.speech_ae(mel, mel_len)
@@ -236,11 +236,11 @@ def supervised_step(model, batch, args, use_dis_loss=False):
     mel_aug = specaugment(mel, mel_len)
     if use_dis_loss:
         pre_pred, post_pred, stop_pred, stop_lens, t_hid = model.tts(text, text_len, mel, mel_len, ret_enc_hid=use_dis_loss)
-        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech', freeze_discriminator=True)
+        t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'speech', args.model_type, freeze_discriminator=True)
 
         text_pred, s_hid = model.asr(text, text_len, mel_aug, mel_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
-        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text', freeze_discriminator=True)
+        s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'text', args.model_type, freeze_discriminator=True)
     else:
         pre_pred, post_pred, stop_pred, stop_lens = model.tts(text, text_len, mel, mel_len)
         text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
@@ -268,7 +268,7 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
     # Do speech!
     if use_dis_loss:
         pre_pred, post_pred, stop_pred, cm_t_hid = model.cm_speech_in(mel, mel_len, ret_enc_hid=use_dis_loss)
-        cm_t_d_loss = discriminator_hidden_to_loss(model, cm_t_hid, 'speech', freeze_discriminator=True)
+        cm_t_d_loss = discriminator_hidden_to_loss(model, cm_t_hid, 'speech', args.model_type, freeze_discriminator=True)
     else:
         pre_pred, post_pred, stop_pred = model.cm_speech_in(mel, mel_len)
     s_cm_loss = speech_loss(gold_mel.to(DEVICE), gold_stop.to(DEVICE), pre_pred, post_pred, mel_len, stop_pred, args.s_eos_weight)
@@ -277,7 +277,7 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
     if use_dis_loss:
         text_pred, cm_s_hid = model.cm_text_in(text, text_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
-        cm_s_d_loss = discriminator_hidden_to_loss(model, cm_s_hid, 'text', freeze_discriminator=True)
+        cm_s_d_loss = discriminator_hidden_to_loss(model, cm_s_hid, 'text', args.model_type, freeze_discriminator=True)
     else:
         text_pred = model.cm_text_in(text, text_len).permute(0, 2, 1)
     t_cm_loss = text_loss(gold_char.to(DEVICE), text_pred, args.t_eos_weight)
@@ -293,18 +293,23 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
         return t_cm_loss, s_cm_loss, cm_t_d_loss, cm_s_d_loss
     return t_cm_loss, s_cm_loss
 
-def discriminator_hidden_to_loss(model, hid, target_type, freeze_discriminator=False):
-    d_in = hid
+def discriminator_hidden_to_loss(model, hid, target_type, model_type, freeze_discriminator=False):
+    if model_type == 'rnn':
+        out, (hid_h, hid_c) = hid
+        hidden = (hid_h[-1:], hid_c[-1:])
+    else:
+        out = hid
+        hidden = None
     if freeze_discriminator:
         with torch.no_grad():
-            d_out = model.discriminator(d_in)
+            d_out = model.discriminator(out, hidden)
     else:
-        d_out = model.discriminator(d_in)
+        d_out = model.discriminator(out, hidden)
     target = discriminator_target(d_out, target_type)
     d_loss = discriminator_loss(d_out, target)
     return d_loss
 
-def discriminator_step(model, batch):
+def discriminator_step(model, batch, args):
     x, _ = process_batch(batch)
     text, mel, text_len, mel_len = x
 
@@ -313,20 +318,12 @@ def discriminator_step(model, batch):
         t_enc_out, _ = model.text_m.encode(text, text_len)
     # quick check to determine between rnn and transformer
     # eventually should be built into the RNN and Transformer Encoder classes
-    if len(t_enc_out) == 2:
-        t_hid = t_enc_out[0][0][-1]
-    else:
-        t_hid = t_enc_out
-    t_d_loss = discriminator_hidden_to_loss(model, t_hid, 'text')
+    t_d_loss = discriminator_hidden_to_loss(model, t_enc_out, 'text', args.model_type)
 
     # speech
     with torch.no_grad():
         s_enc_out, _ = model.speech_m.encode(mel, mel_len)
-    if len(s_enc_out) == 2:
-        s_hid = s_enc_out[0][0][-1]
-    else:
-        s_hid = s_enc_out
-    s_d_loss = discriminator_hidden_to_loss(model, s_hid, 'speech')
+    s_d_loss = discriminator_hidden_to_loss(model, s_enc_out, 'speech', args.model_type)
 
     # Check loss is not NaN
     check_nan_loss(model, t_d_loss, "dis_text_loss", text, None, mel, None, None, None)
@@ -430,8 +427,8 @@ def train_cm_step(losses, model, batch, step, accum_steps, args):
 
     return loss
 
-def train_discriminator_step(losses, model, batch, step, accum_steps):
-    t_d_loss, s_d_loss = discriminator_step(model, batch)
+def train_discriminator_step(losses, model, batch, step, accum_steps, args):
+    t_d_loss, s_d_loss = discriminator_step(model, batch, args)
 
     loss = (t_d_loss + s_d_loss) / accum_steps
     loss.backward()
@@ -566,7 +563,7 @@ def train(args):
                 for si in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
                     step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
-                    train_discriminator_step(losses, model, batch, step, args.d_steps)
+                    train_discriminator_step(losses, model, batch, step, args.d_steps, args)
                 optimizer_step(model, optimizer, args)
 
             # Monitor certain information
@@ -816,7 +813,7 @@ def initialize_model(args):
         speech_m = SpeechTransformer(args)
 
     if args.use_discriminator:
-        discriminator = Discriminator(args.hidden)
+        discriminator = LSTMDiscriminator(args.hidden, args.disc_hid, bidirectional=args.disc_bidirectional)
     model = UNAST(text_m, speech_m, discriminator, teacher).to(DEVICE)
 
     # initialize optimizer
