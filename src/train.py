@@ -237,7 +237,7 @@ def supervised_step(model, batch, args, use_dis_loss=False):
     mel_aug = specaugment(mel, mel_len)
     if use_dis_loss:
         pre_pred, post_pred, stop_pred, stop_lens, t_hid = model.tts(text, text_len, mel, mel_len, ret_enc_hid=use_dis_loss)
-        t_d_loss = discriminator_hidden_to_loss(model, t_hid, t_len, 'speech', args.model_type, freeze_discriminator=True)
+        t_d_loss = discriminator_hidden_to_loss(model, t_hid, text_len, 'speech', args.model_type, freeze_discriminator=True)
 
         text_pred, s_hid = model.asr(text, text_len, mel_aug, mel_len, ret_enc_hid=use_dis_loss)
         text_pred = text_pred.permute(0, 2, 1)
