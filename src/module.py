@@ -4,11 +4,13 @@ for preprocessing speech and text, the transformer & RNN encoder/decoder, & post
 processing modules for text and speech.
 '''
 import torch
+from torch.nn.utils.rnn import pack_padded_sequence, pad_packed_sequence
 import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from collections import OrderedDict
 import math
+from utils import PAD_IDX
 
 from data.symbols import symbols
 
@@ -246,6 +248,7 @@ class PositionalEncoding(nn.Module):
         # d_model is model dimension
         super(PositionalEncoding, self).__init__()
         self.dropout = nn.Dropout(p=dropout)
+        self.d_model_scale = math.sqrt(d_model)
 
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
@@ -256,7 +259,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        x = x + self.pe[:, :x.size(1), :]
+        x = x * self.d_model_scale + self.pe[:, :x.size(1), :]
         return self.dropout(x)
 
 class TransformerEncoder(nn.Module):
@@ -300,9 +303,11 @@ class RNNEncoder(nn.Module):
             self.reduce_h_W = nn.Linear(hidden * 2, hidden, bias=True)
             self.reduce_c_W = nn.Linear(hidden * 2, hidden, bias=True)
 
-    def forward(self, sequence):
-        output, hn = self.rnn(sequence)
+    def forward(self, sequence, lengths):
 
+        packed_seq = pack_padded_sequence(sequence, lengths, batch_first=True, enforce_sorted=False)
+        packed_output, hn = self.rnn(packed_seq)
+        output = pad_packed_sequence(packed_output, batch_first=True, padding_value=PAD_IDX)
         if self.num_dir == 2:
             # Potential source of error here!!
             h = hn[0].view(self.num_layers, self.num_dir, -1, self.hidden)
@@ -342,7 +347,6 @@ class RNNDecoder(nn.Module):
                 self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
             elif self.attention == "luong":
                 self.attention_layer = LuongGeneralAttention(hidden, enc_out_size, attn_dim)
-            # self.attention_layer = LocationSensitiveAttention(hidden, enc_out_size, attn_dim)
             self.linear_projection = Linear(enc_out_size + hidden, hidden, w_init='tanh')
             self.dropout1 = nn.Dropout(p=dropout)
 
