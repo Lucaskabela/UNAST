@@ -108,7 +108,7 @@ class UNAST(nn.Module):
         text_pred = self.text_m.decode_sequence(text, text_len, cm_s_e_o, cm_mask,
             teacher_ratio=1)
         if ret_enc_hid:
-            return text_pred, cm_s_e_o
+            return text_pred, cm_s_e_o, pred_lens
         return text_pred
 
     def cm_speech_in(self, mel, mel_len, ret_enc_hid=False):
@@ -119,7 +119,7 @@ class UNAST(nn.Module):
         pre_pred, post_pred, stop_pred, stop_lens = self.speech_m.decode_sequence(mel, mel_len, cm_t_e_o,
             cm_t_masks, teacher_ratio=1)
         if ret_enc_hid:
-            return pre_pred, post_pred, stop_pred, cm_t_e_o
+            return pre_pred, post_pred, stop_pred, cm_t_e_o, text_pred_len
         return pre_pred, post_pred, stop_pred
 
     def tts(self, text, text_len, mel, mel_len, infer=False, ret_enc_hid=False):
@@ -172,17 +172,23 @@ class Discriminator(nn.Module):
 class LSTMDiscriminator(nn.Module):
     def __init__(self, d_in, hidden, bidirectional=False, num_layers=1, dropout=.2, relu=.2):
         super(LSTMDiscriminator, self).__init__()
+        self.num_dir = 2 if bidirectional else 1
+        self.num_layers=num_layers
+        self.hidden = hidden
         self.rnn = RNNEncoder(d_in, hidden, bidirectional=bidirectional, num_layers=num_layers, dropout=dropout)
-        self.fc = nn.Linear(hidden, 2)
-        #self.dropout = nn.Dropout(p=dropout)
-        #self.non_linear = nn.LeakyReLU(relu)
+        self.dropout = nn.Dropout(p=dropout)
+        self.non_linear = nn.LeakyReLU(relu)
+        self.reduce_h_W = nn.Linear(hidden * self.num_dir, hidden)
+        self.fc2 = nn.Linear(hidden, 2)
 
-    def forward(self, out):
-        _, (e_h, _) = self.rnn(out)
-        #temp = self.dropout(self.non_linear(self.fc1(enc_output)))
-        #temp2 = self.dropout(self.non_linear(self.fc2(temp)))
-        #temp3 = self.dropout(self.non_linear(self.fc3(temp2)))
-        return self.fc(e_h[-1])
+    def forward(self, out, out_len):
+        _, (e_h, _) = self.rnn(out, out_len)
+        if self.num_dir == 2:
+            h = e_h.view(self.num_layers, self.num_dir, -1, self.hidden)
+            out = torch.cat((h[:, 0, :, :], h[:, 1, :, :]), dim=-1)
+        else:
+            out = e_h[-1]
+        return self.fc2(self.dropout(self.non_linear(self.reduce_h_W(out))))
 
 class SpeechTransformer(AutoEncoderNet):
 
