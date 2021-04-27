@@ -18,10 +18,13 @@ import torch.nn.functional as F
 import torch.nn as nn
 import torch
 import numpy as np
+import matplotlib.pyplot as plt
 from collections import defaultdict
 from data import sequence_to_text
 import datetime
 import math
+import io
+import os
 import sys
 
 # DEVICE, WRITER are the only global variable
@@ -142,7 +145,7 @@ def cross_entropy(input, target, size_average=True):
         return torch.sum(torch.sum(-target * logsoftmax(input), dim=1))
 
 def discriminator_loss(output, target):
-    return cross_entropy(output, target)
+    return F.binary_cross_entropy_with_logits(output, target)
 
 def discriminator_target(batch_size, target_type, smoothing=0.1):
     """
@@ -152,16 +155,12 @@ def discriminator_target(batch_size, target_type, smoothing=0.1):
         -type : 'text' or 'speech'
         -smoothing : label smoothing factor
     Return
-        [batch_size x 2] tensor with target smoothed labels
+        [batch_size] tensor with target smoothed labels
     """
-    target = torch.empty(batch_size, 2)
-    if target_type == 'text':
-        smoothed_target_label = [1 - smoothing, smoothing]
-    else:
-        # target_type == 'speech' implicitly
-        smoothed_target_label = [smoothing, 1 - smoothing]
-    smoothed_target_label = torch.as_tensor(smoothed_target_label, device=DEVICE)
-    target[:,] = smoothed_target_label
+    target = torch.ones(batch_size).float()
+    target -= smoothing
+    if target_type == 'speech':
+        target = 1 - target
     return target
 
 def check_nan_loss(model, loss, loss_type, text_gold, text_pred, speech_gold, speech_pred, stop_gold, stop_pred):
@@ -211,7 +210,7 @@ def autoencoder_step(model, batch, args, use_dis_loss=False):
         pre_pred, post_pred, stop_pred, s_hid = model.speech_ae(mel, mel_len, ret_enc_hid=use_dis_loss)
 
         d_batch = discriminator_shuffle_batch(t_hid, text_len, s_hid, mel_len, args.model_type)
-        d_ae_loss = discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=True)
+        d_ae_loss, _ = discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=True)
     else:
         text_pred = model.text_ae(text, text_len).permute(0, 2, 1)
         pre_pred, post_pred, stop_pred = model.speech_ae(mel, mel_len)
@@ -241,7 +240,7 @@ def supervised_step(model, batch, args, use_dis_loss=False):
         text_pred = text_pred.permute(0, 2, 1)
 
         d_batch = discriminator_shuffle_batch(t_hid, text_len, s_hid, mel_len, args.model_type)
-        d_sp_loss = discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=True)
+        d_sp_loss, _ = discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=True)
     else:
         pre_pred, post_pred, stop_pred, stop_lens = model.tts(text, text_len, mel, mel_len)
         text_pred = model.asr(text, text_len, mel_aug, mel_len).permute(0, 2, 1)
@@ -282,7 +281,7 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
 
     if use_dis_loss:
         d_batch = discriminator_shuffle_batch(cm_t_hid, cm_t_len, cm_s_hid, cm_s_len, args.model_type)
-        d_cm_loss = discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=True)
+        d_cm_loss, _ = discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=True)
 
     # Check loss is not NaN
     check_nan_loss(model, t_cm_loss, "cm_text_loss", text, text_pred, mel, post_pred, gold_stop, stop_pred)
@@ -338,7 +337,7 @@ def discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=False):
         d_hid, d_len, d_target = d_batch
         d_out = model.discriminator(d_hid, d_len)
         d_loss += discriminator_loss(d_out, d_target)
-    return d_loss
+    return d_loss, (d_out, d_target)
 
 def discriminator_step(model, batch, args):
     x, _ = batch
@@ -352,12 +351,12 @@ def discriminator_step(model, batch, args):
     # quick check to determine between rnn and transformer
     # eventually should be built into the RNN and Transformer Encoder classes
     d_batch = discriminator_shuffle_batch(t_enc_out, text_len, s_enc_out, mel_len, args.model_type)
-    d_loss = discriminator_hidden_to_loss(model, d_batch)
+    d_loss, d_output = discriminator_hidden_to_loss(model, d_batch)
 
     # Check loss is not NaN
     check_nan_loss(model, d_loss, "dis_loss", text, None, mel, None, None, None)
 
-    return d_loss
+    return d_loss, d_output
 
 
 #####---- Use these to train on a task -----#####
@@ -449,9 +448,9 @@ def train_cm_step(losses, model, batch, step, accum_steps, args):
 
     return loss
 
-def train_discriminator_step(losses, model, batch, step, accum_steps, args):
+def train_discriminator_step(losses, model, batch, step, accum_steps, args, log_out_to_tb=False):
     batch = process_batch(batch)
-    d_loss = discriminator_step(model, batch, args)
+    d_loss, d_output = discriminator_step(model, batch, args)
 
     loss = d_loss / accum_steps
     loss.backward()
@@ -462,6 +461,9 @@ def train_discriminator_step(losses, model, batch, step, accum_steps, args):
     # Log to tensorboard
     if WRITER:
         WRITER.add_scalar('train/dis_loss', d_loss.detach().cpu().item(), step)
+        if log_out_to_tb:
+            d_out, d_target = d_output
+            log_tb_discrim_out(d_out, d_target, step)
 
     return loss
 
@@ -474,7 +476,7 @@ def unfreeze_model_parameters(model):
         param.requires_grad = True
 
 #####----- Train and evaluate -----#####
-def evaluate(model, valid_dataloader, args):
+def evaluate(model, valid_dataloader, step, args):
     """
         Expect validation set to have paired speech & text!
         Primary evaluation is PER - can gauge training by the other losses
@@ -519,7 +521,7 @@ def evaluate(model, valid_dataloader, args):
                 losses['d_cm'].append(d_cm_loss.detach().item())
 
             if args.use_discriminator:
-                d_loss = discriminator_step(model, batch, args)
+                d_loss, d_output = discriminator_step(model, batch, args)
                 losses['dis'].append(d_loss.detach().item())
 
             text_pred, text_pred_len = model.asr(None, None, mel, mel_len, infer=True)
@@ -528,6 +530,9 @@ def evaluate(model, valid_dataloader, args):
 
         # TODO: evaluate speech inference somehow?
         compare_outputs(text[-1][:], text_pred[-1][:], text_len[-1], text_pred_len[-1])
+        if args.use_discriminator:
+            d_out, d_target = d_output
+            log_tb_discrim_out(d_out, d_target, step, "eval")
 
     return per/n_iters, losses
 
@@ -552,7 +557,7 @@ def train(args):
     s_epoch, best, model, optimizer, scheduler = initialize_model(args)
 
     print("Training model with {} parameters".format(model.num_params()))
-    per, eval_losses = evaluate(model, valid_dataloader, args)
+    per, eval_losses = evaluate(model, valid_dataloader, -1, args)
     log_loss_metrics(eval_losses, -1, eval=True)
 
     max_obj_steps = max(args.ae_steps, args.cm_steps, args.sp_steps)
@@ -603,7 +608,8 @@ def train(args):
                 for si in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
                     step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
-                    train_discriminator_step(losses, model, batch, step, args.d_steps, args)
+                    log_out_to_tb = si == 0 and (s + 1) % args.tb_example_step == 0
+                    train_discriminator_step(losses, model, batch, step, args.d_steps, args, log_out_to_tb)
                 optimizer_step(model, optimizer, args)
 
             # Monitor certain information
@@ -631,13 +637,13 @@ def train(args):
                 log_tb_example(model, ex, step)
 
         # Eval and save
-        per, eval_losses = evaluate(model, valid_dataloader, args)
+        step = (epoch + 1)*epoch_steps*max_obj_steps - 1
+        per, eval_losses = evaluate(model, valid_dataloader, step, args)
         log_loss_metrics(losses, epoch)
         log_loss_metrics(eval_losses, epoch, eval=True)
 
         # Log eval example to tensorboard
         if WRITER:
-            step = (epoch + 1)*epoch_steps*max_obj_steps - 1
             idx = np.random.randint(0, len(val_dataset))
             ex = val_dataset[idx]
             log_tb_example(model, ex, step, "eval")
@@ -687,6 +693,32 @@ def log_tb_example(model, ex, step, name="train"):
             WRITER.add_image(f"{name}/speech_gold", np.flip(ex["mel"][:ex_mel_len].transpose(), axis=0), step, dataformats="HW")
             WRITER.add_image(f"{name}/speech_pred", np.flip(speech_pred[:speech_pred_len].transpose(), axis=0), step, dataformats="HW")
 
+
+def log_tb_discrim_out(d_out, d_target, step, name="train"):
+    """
+    Log example of discriminator output to tensorboard
+    params
+        - d_out: discriminator output
+        - d_target: discriminator target
+        - step: tensorboard global step
+    """
+    if WRITER:
+        d_out = torch.sigmoid(d_out)
+
+        batch = d_out.shape[0]
+        fig, ax = plt.subplots(figsize=(batch // 2, 3))
+
+        # plot bars
+        ind = np.arange(batch)
+        width = 0.2
+        ax.bar(ind, d_out.detach().cpu().numpy(), width, label="pred")
+        ax.bar(ind + width, d_target.detach().cpu().numpy(), width, label="gold")
+        ax.set_xticks(ind + width / 2)
+        ax.set_xticklabels(ind)
+        ax.legend()
+        fig.tight_layout()
+
+        WRITER.add_figure(f"{name}/discrim_output", fig, step)
 
 def log_loss_metrics(losses, epoch, eval=False):
     kind = "Train"
@@ -867,9 +899,13 @@ def initialize_model(args):
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
     # continue training if needed
-    s_epoch, best = 0, 100
+    s_epoch, best = 0, 300
     if args.load_path is not None:
-        s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
+        if os.path.isfile(args.load_path):
+            s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
+        else:
+            print(f"[WARN] Could not find checkpoint '{args.load_path}'.")
+            print(f"[WARN] Training from initial model...")
 
     # initialize scheduler
     scheduler = None
@@ -899,7 +935,7 @@ def initialize_datasets(args):
     # TODO: remove the subsets used for experimentation
     #supervised_train_dataset = torch.utils.data.Subset(supervised_train_dataset, range(100))
     #unsupervised_train_dataset = torch.utils.data.Subset(unsupervised_train_dataset, range(100))
-    #val_dataset = torch.utils.data.Subset(val_dataset, range(100))
+    #val_dataset = torch.utils.data.Subset(val_dataset, range(200))
     #full_train_dataset = torch.utils.data.Subset(full_train_dataset, range(100))
 
     return supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset

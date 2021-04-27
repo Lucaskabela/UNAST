@@ -154,7 +154,7 @@ class UNAST(nn.Module):
 class Discriminator(nn.Module):
     # From Lample et al.
     # "3 hidden layers, 1024 hidden layers, smoothing coefficient 0.1"
-    def __init__(self, enc_dim, hidden=1024, out_classes=2, dropout=.2, relu=.2):
+    def __init__(self, enc_dim, hidden=1024, out_classes=1, dropout=.2, relu=.2):
         super(Discriminator, self).__init__()
         self.fc1 = nn.Linear(enc_dim, hidden)
         self.fc2 = nn.Linear(hidden, hidden)
@@ -167,10 +167,10 @@ class Discriminator(nn.Module):
         temp = self.dropout(self.non_linear(self.fc1(enc_output)))
         temp2 = self.dropout(self.non_linear(self.fc2(temp)))
         temp3 = self.dropout(self.non_linear(self.fc3(temp2)))
-        return self.fc4(temp3)
+        return self.fc4(temp3).squeeze(dim=-1)
 
 class LSTMDiscriminator(nn.Module):
-    def __init__(self, d_in, hidden, bidirectional=False, num_layers=1, dropout=.2, relu=.2):
+    def __init__(self, d_in, hidden, out=1, bidirectional=False, num_layers=1, dropout=.2, relu=.2):
         super(LSTMDiscriminator, self).__init__()
         self.num_dir = 2 if bidirectional else 1
         self.num_layers=num_layers
@@ -178,12 +178,12 @@ class LSTMDiscriminator(nn.Module):
         self.rnn = RNNEncoder(d_in, hidden, bidirectional=bidirectional, num_layers=num_layers, dropout=dropout)
         self.dropout = nn.Dropout(p=dropout)
         self.non_linear = nn.LeakyReLU(relu)
-        self.fc2 = nn.Linear(hidden, 2)
+        self.fc2 = nn.Linear(hidden, out)
 
     def forward(self, out, out_len):
         _, (e_h, _) = self.rnn(out, out_len)
         # -1 gets topmost layer I think
-        return self.fc2(self.dropout(self.non_linear(e_h[-1])))
+        return self.fc2(self.dropout(self.non_linear(e_h[-1]))).squeeze(dim=-1)
 
 class SpeechTransformer(AutoEncoderNet):
 
