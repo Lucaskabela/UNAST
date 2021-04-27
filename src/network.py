@@ -181,6 +181,24 @@ class Discriminator(nn.Module):
         temp3 = self.dropout(self.non_linear(self.fc3(temp2)))
         return self.fc4(temp3)
 
+class LSTMDiscriminator(nn.Module):
+    def __init__(self, d_in, hidden, bidirectional=False, num_layers=1, dropout=.2, relu=.2):
+        super(LSTMDiscriminator, self).__init__()
+        self.rnn = RNNEncoder(d_in, hidden, bidirectional=bidirectional, num_layers=num_layers, dropout=dropout)
+        self.fc = nn.Linear(hidden, 2)
+        #self.dropout = nn.Dropout(p=dropout)
+        #self.non_linear = nn.LeakyReLU(relu)
+
+    def forward(self, out, hid=None):
+        if hid is None:
+            _, (e_h, _) = self.rnn(out)
+        else:
+            _, (e_h, _) = self.rnn(out, hid)
+        #temp = self.dropout(self.non_linear(self.fc1(enc_output)))
+        #temp2 = self.dropout(self.non_linear(self.fc2(temp)))
+        #temp3 = self.dropout(self.non_linear(self.fc3(temp2)))
+        return self.fc(e_h[-1])
+
 class SpeechTransformer(AutoEncoderNet):
 
     def __init__(self, args):
