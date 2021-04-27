@@ -19,6 +19,7 @@ import torch
 import numpy as np
 from collections import defaultdict
 from data import sequence_to_text
+import datetime
 import math
 import sys
 
@@ -606,6 +607,8 @@ def train(args):
         model.teacher.step()
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
         save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
+        if args.save_every is not None and (epoch + 1) % args.save_every == 0:
+            save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path, epoch_save=True)
         if per < best:
             print("\t Best score - saving model!")
             best = per
@@ -830,8 +833,9 @@ def initialize_model(args):
     # initialize scheduler
     scheduler = None
     if args.sched_type == 'multistep':
-        milestones = [i - s_epoch for i in args.lr_milestones if (i - s_epoch > 0)]
-        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma)
+        milestones = [i * args.epoch_steps for i in args.lr_milestones]
+        last_step = s_epoch * args.epoch_steps
+        scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma, last_epoch=last_step-1)
     elif args.sched_type == 'linear':
         num_training_steps = args.epochs * args.epoch_steps
         last_step = s_epoch * args.epoch_steps
@@ -868,7 +872,7 @@ if __name__ == "__main__":
     global DEVICE
     global WRITER
     DEVICE = init_device(args)
-    print(f"Device: {DEVICE}")
+    print(f"[{datetime.datetime.now()}] Device: {DEVICE}")
 
     if args.tb_log_path:
         WRITER = SummaryWriter(log_dir=args.tb_log_path, flush_secs=60)
