@@ -178,17 +178,12 @@ class LSTMDiscriminator(nn.Module):
         self.rnn = RNNEncoder(d_in, hidden, bidirectional=bidirectional, num_layers=num_layers, dropout=dropout)
         self.dropout = nn.Dropout(p=dropout)
         self.non_linear = nn.LeakyReLU(relu)
-        self.reduce_h_W = nn.Linear(hidden * self.num_dir, hidden)
         self.fc2 = nn.Linear(hidden, 2)
 
     def forward(self, out, out_len):
         _, (e_h, _) = self.rnn(out, out_len)
-        if self.num_dir == 2:
-            h = e_h.view(self.num_layers, self.num_dir, -1, self.hidden)
-            out = torch.cat((h[:, 0, :, :], h[:, 1, :, :]), dim=-1)
-        else:
-            out = e_h[-1]
-        return self.fc2(self.dropout(self.non_linear(self.reduce_h_W(out))))
+        # -1 gets topmost layer I think
+        return self.fc2(self.dropout(self.non_linear(e_h[-1])))
 
 class SpeechTransformer(AutoEncoderNet):
 
