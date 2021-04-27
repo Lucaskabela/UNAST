@@ -11,6 +11,7 @@ from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
 from network import TextRNN, SpeechRNN, TextTransformer, SpeechTransformer, UNAST, Discriminator, LSTMDiscriminator
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
+from torch.nn.utils.rnn import pad_sequence
 import audio_parameters as ap
 import argparse
 import torch.nn.functional as F
@@ -159,7 +160,7 @@ def discriminator_target(batch_size, target_type, smoothing=0.1):
     else:
         # target_type == 'speech' implicitly
         smoothed_target_label = [smoothing, 1 - smoothing]
-    smoothed_target_label = torch.as_tensor(smoothed_target_label)
+    smoothed_target_label = torch.as_tensor(smoothed_target_label, device=DEVICE)
     target[:,] = smoothed_target_label
     return target
 
@@ -310,13 +311,11 @@ def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type):
     #       but this should be ignored with pack_padded_sequence()?
     t_seq_dim = t_out.shape[1]
     s_seq_dim = s_out.shape[1]
-    if t_seq_dim < s_seq_dim:
-        t_out = F.pad(t_out, (0, 0, 0, s_seq_dim - t_seq_dim), "constant", PAD_IDX)
-    if s_seq_dim < t_seq_dim:
-        s_out = F.pad(s_out, (0, 0, 0, t_seq_dim - s_seq_dim), "constant", PAD_IDX)
+    d_hid = pad_sequence([t_out.permute(1,0,2), s_out.permute(1,0,2)], padding_value=PAD_IDX)
+    # Remove catted padding sequence then recat on batch size
+    d_hid = torch.cat(torch.unbind(d_hid, dim=1), dim=1).permute(1, 0, 2)
 
     # Concatenate
-    d_hid = torch.cat([t_out, s_out], dim=0)
     d_len = torch.cat([t_hid_len, s_hid_len], dim=0)
     d_target = torch.cat([t_target, s_target], dim=0)
 
@@ -326,25 +325,20 @@ def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type):
     d_len = d_len[indices]
     d_target = d_target[indices]
 
-    # Split
-    d_hid = torch.split(d_hid, [t_out.shape[0], s_out.shape[0]])
-    d_len = torch.split(d_len, [t_out.shape[0], s_out.shape[0]])
-    d_target = torch.split(d_target, [t_out.shape[0], s_out.shape[0]])
-
-    d_batch = list(zip(d_hid, d_len, d_target))
+    d_batch = (d_hid, d_len, d_target)
     return d_batch
 
 def discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=False):
     d_loss = 0
     if freeze_discriminator:
         with torch.no_grad():
-            for d_hid, d_len, d_target in d_batch:
-                d_out = model.discriminator(d_hid, d_len)
-                d_loss += discriminator_loss(d_out, d_target)
-    else:
-        for d_hid, d_len, d_target in d_batch:
+            d_hid, d_len, d_target = d_batch
             d_out = model.discriminator(d_hid, d_len)
             d_loss += discriminator_loss(d_out, d_target)
+    else:
+        d_hid, d_len, d_target = d_batch
+        d_out = model.discriminator(d_hid, d_len)
+        d_loss += discriminator_loss(d_out, d_target)
     return d_loss
 
 def discriminator_step(model, batch, args):
