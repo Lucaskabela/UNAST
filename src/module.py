@@ -307,7 +307,7 @@ class RNNEncoder(nn.Module):
 
         packed_seq = pack_padded_sequence(sequence, lengths, batch_first=True, enforce_sorted=False)
         packed_output, hn = self.rnn(packed_seq)
-        output = pad_packed_sequence(packed_output, batch_first=True, padding_value=PAD_IDX)
+        output, _ = pad_packed_sequence(packed_output, batch_first=True, padding_value=PAD_IDX)
         if self.num_dir == 2:
             # Potential source of error here!!
             h = hn[0].view(self.num_layers, self.num_dir, -1, self.hidden)

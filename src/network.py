@@ -203,7 +203,7 @@ class SpeechTransformer(AutoEncoderNet):
         enc_outputs = self.encoder(embedded_input, input_mask, input_pad_mask)
         return enc_outputs, (input_mask, input_pad_mask)
 
-    def decode(self, tgt, tgt_lens, dec_mask, enc_outputs, enc_mask):
+    def decode(self, tgt, tgt_lens, tgt_pad_mask, enc_outputs, enc_mask):
         tgt_mask = generate_square_subsequent_mask(tgt.shape[1], tgt.device)
         embedded_tgt = self.pos_emb(self.prenet(tgt))
         out = self.decoder(embedded_tgt, enc_outputs, tgt_mask,tgt_key_padding_mask=tgt_pad_mask, memory_key_padding_mask=enc_mask)
