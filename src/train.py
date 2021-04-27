@@ -307,11 +307,10 @@ def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type):
     s_target = discriminator_target(s_out.shape[0], 'speech').to(s_out)
 
     # Pad both hidden states' sequence length with PAD_IDX to match dims
-    # Note: F.pad is nondeterministic in backward pass when used with CUDA,
-    #       but this should be ignored with pack_padded_sequence()?
     t_seq_dim = t_out.shape[1]
     s_seq_dim = s_out.shape[1]
-    d_hid = pad_sequence([t_out.permute(1,0,2), s_out.permute(1,0,2)], padding_value=PAD_IDX)
+    d_hid = pad_sequence([t_out.permute(1, 0, 2), s_out.permute(1, 0, 2)], padding_value=PAD_IDX)
+
     # Remove catted padding sequence then recat on batch size
     d_hid = torch.cat(torch.unbind(d_hid, dim=1), dim=1).permute(1, 0, 2)
 
