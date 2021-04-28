@@ -555,14 +555,15 @@ def train(args):
 
     s_epoch, best, model, optimizer, scheduler = initialize_model(args)
 
-    print("Training model with {} parameters".format(model.num_params()))
-    per, eval_losses = evaluate(model, valid_dataloader, -1, args)
-    log_loss_metrics(eval_losses, -1, eval=True)
-
     max_obj_steps = max(args.ae_steps, args.cm_steps, args.sp_steps)
     if args.use_discriminator:
         max_obj_steps = max(max_obj_steps, args.d_steps)
     accum_steps = args.ae_steps + args.cm_steps + args.sp_steps
+
+    print("Training model with {} parameters".format(model.num_params()))
+    step = s_epoch*args.epoch_steps*max_obj_steps - 1
+    per, eval_losses = evaluate(model, valid_dataloader, step, args)
+    log_loss_metrics(eval_losses, s_epoch-1, eval=True)
 
     for epoch in range(s_epoch, args.epochs):
         losses = defaultdict(list)
@@ -635,7 +636,12 @@ def train(args):
                 step = epoch*epoch_steps*max_obj_steps + (s + 1)*max_obj_steps - 1
                 log_tb_example(model, ex, step)
 
-        # Eval and save
+        #model.teacher.step()
+
+        # Pre-save to avoid losing epoch when errors in evaluation
+        save_ckp(epoch, 300.0, model, optimizer, False, args.checkpoint_path)
+
+        # Eval
         step = (epoch + 1)*epoch_steps*max_obj_steps - 1
         per, eval_losses = evaluate(model, valid_dataloader, step, args)
         log_loss_metrics(losses, epoch)
@@ -650,14 +656,15 @@ def train(args):
                 WRITER.add_scalar(f"eval/{key_}_loss", np.mean(loss), step)
             WRITER.add_scalar(f"eval/per", per, step)
 
-        model.teacher.step()
+        # Save
         print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
-        save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
         if args.save_every is not None and (epoch + 1) % args.save_every == 0:
             save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path, epoch_save=True)
         if per < best:
             print("\t Best score - saving model!")
+            save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
             best = per
+
     model.eval()
     return model
 
@@ -902,9 +909,10 @@ def initialize_model(args):
     if args.load_path is not None:
         if os.path.isfile(args.load_path):
             s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
+            print(f"[INFO] Training from epoch {s_epoch}.")
         else:
-            print(f"[WARN] Could not find checkpoint '{args.load_path}'.")
-            print(f"[WARN] Training from initial model...")
+            print(f"[INFO] Could not find checkpoint '{args.load_path}'.")
+            print(f"[INFO] Training from initial model.")
 
     # initialize scheduler
     scheduler = None
