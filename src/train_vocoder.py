@@ -93,11 +93,16 @@ def train(args):
             if args.grad_clip > 0.0:
                 nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip)
             optimizer.step()
-            scheduler.step()
 
             if WRITER:
+                with torch.no_grad():
+                    sum_params = 0
+                    for param in model.parameters():
+                        sum_params += torch.sum(param).abs().item()
                 step = epoch*train_epoch_steps + i
                 WRITER.add_scalar('train/vocoder_loss', loss, step)
+                WRITER.add_scalar('misc/learning_rate', optimizer.param_groups[0]['lr'], step)
+                WRITER.add_scalar("misc/model_params_weight", sum_params, step)
                 if (step + 1) % args.tb_example_step == 0:
                     mel_ex = mel[-1].detach().cpu().numpy()
                     mag_ex = mag[-1].detach().cpu().numpy()
@@ -106,29 +111,32 @@ def train(args):
                     WRITER.add_image('train/mag_gold', np.flip(mag_ex.transpose(), axis=0), step, dataformats='HW')
                     WRITER.add_image('train/mag_pred', np.flip(pred_ex.transpose(), axis=0), step, dataformats='HW')
 
+            scheduler.step()
+
         # Evaluation
         model.eval()
         losses = []
         pbar = tqdm(valid_dataloader)
         pbar.set_description(f"Valid Epoch {epoch}")
-        for i, data in enumerate(pbar):
-            mel, mag = data
-            mel = mel.to(DEVICE)
-            mag = mag.to(DEVICE)
+        with torch.no_grad():
+            for i, data in enumerate(pbar):
+                mel, mag = data
+                mel = mel.to(DEVICE)
+                mag = mag.to(DEVICE)
 
-            mag_pred = model.forward(mel)
-            loss = loss_fn(mag_pred, mag)
+                mag_pred = model.forward(mel)
+                loss = loss_fn(mag_pred, mag)
 
-            losses.append(loss)
-            if WRITER:
-                step = epoch*valid_epoch_steps + i
-                if (step + 1) % args.tb_example_step == 0:
-                    mel_ex = mel[-1].detach().cpu().numpy()
-                    mag_ex = mag[-1].detach().cpu().numpy()
-                    pred_ex = mag_pred[-1].detach().cpu().numpy()
-                    WRITER.add_image('eval/mel_input', np.flip(mel_ex.transpose(), axis=0), step, dataformats='HW')
-                    WRITER.add_image('eval/mag_gold', np.flip(mag_ex.transpose(), axis=0), step, dataformats='HW')
-                    WRITER.add_image('eval/mag_pred', np.flip(pred_ex.transpose(), axis=0), step, dataformats='HW')
+                losses.append(loss)
+                if WRITER:
+                    step = epoch*valid_epoch_steps + i
+                    if (step + 1) % args.tb_example_step == 0:
+                        mel_ex = mel[-1].detach().cpu().numpy()
+                        mag_ex = mag[-1].detach().cpu().numpy()
+                        pred_ex = mag_pred[-1].detach().cpu().numpy()
+                        WRITER.add_image('eval/mel_input', np.flip(mel_ex.transpose(), axis=0), step, dataformats='HW')
+                        WRITER.add_image('eval/mag_gold', np.flip(mag_ex.transpose(), axis=0), step, dataformats='HW')
+                        WRITER.add_image('eval/mag_pred', np.flip(pred_ex.transpose(), axis=0), step, dataformats='HW')
 
         if WRITER:
             step = (epoch + 1)*train_epoch_steps - 1

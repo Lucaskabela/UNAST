@@ -19,6 +19,6 @@
     "tb_log_path": "./log_tb/vocoder",
     "num_workers": 4,
     "load_path": "./checkpoint/vocoder/model_most_recent.ckpt",
-    "save_every": 1000,
+    "save_every": 250,
     "use_gpu": true
 }
