@@ -624,7 +624,7 @@ class TextRNN(AutoEncoderNet):
         return pred
 
 
-class MelToSpeechNet(nn.Module):
+class Vocoder(nn.Module):
     """
     CBHG Network, copied from Transformer-TTS.
 
@@ -637,7 +637,7 @@ class MelToSpeechNet(nn.Module):
         :param hidden_size: Convolution hidden channels
         :param num_fft: Number of FFTs
         """
-        super(MelToSpeechNet, self).__init__()
+        super(Vocoder, self).__init__()
         self.pre_projection = Conv(num_mels, hidden_size)
         self.cbhg = CBHG(hidden_size)
         self.post_projection = Conv(hidden_size, (num_fft // 2) + 1)
