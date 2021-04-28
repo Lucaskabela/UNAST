@@ -293,7 +293,7 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
         return t_cm_loss, s_cm_loss, d_cm_loss
     return t_cm_loss, s_cm_loss
 
-def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type):
+def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type, train_discriminator=False):
     if model_type == 'rnn':
         _, t_out = t_hid
         _, s_out = s_hid
@@ -316,6 +316,8 @@ def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type):
     # Concatenate
     d_len = torch.cat([t_hid_len, s_hid_len], dim=0)
     d_target = torch.cat([t_target, s_target], dim=0)
+    if not train_discriminator:
+        d_target = 1 - d_target
 
     # Shuffle
     indices = torch.randperm(d_hid.shape[0])
@@ -350,7 +352,7 @@ def discriminator_step(model, batch, args):
 
     # quick check to determine between rnn and transformer
     # eventually should be built into the RNN and Transformer Encoder classes
-    d_batch = discriminator_shuffle_batch(t_enc_out, text_len, s_enc_out, mel_len, args.model_type)
+    d_batch = discriminator_shuffle_batch(t_enc_out, text_len, s_enc_out, mel_len, args.model_type, train_discriminator=True)
     d_loss, d_output = discriminator_hidden_to_loss(model, d_batch)
 
     # Check loss is not NaN
