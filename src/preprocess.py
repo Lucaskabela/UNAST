@@ -14,7 +14,7 @@ import math
 class LJDatasets(Dataset):
     """LJSpeech dataset."""
 
-    def __init__(self, csv_file, root_dir):
+    def __init__(self, csv_file, root_dir, ret_file_names=False):
         """
         Args:
             csv_file (string): Path to the csv file with annotations.
@@ -23,6 +23,7 @@ class LJDatasets(Dataset):
         """
         self.landmarks_frame = pd.read_csv(csv_file, sep='|', header=None)
         self.root_dir = root_dir
+        self.ret_file_names = ret_file_names
 
     def load_wav(self, filename):
         return librosa.load(filename, sr=ap.sr)
@@ -32,6 +33,7 @@ class LJDatasets(Dataset):
 
     def __getitem__(self, idx):
         wav_name = os.path.join(self.root_dir, self.landmarks_frame.loc[idx, 0]) + '.wav'
+        fname = wav_name[:-4]
         original_text = self.landmarks_frame.loc[idx, 1]
 
         text = np.asarray(raw_text_to_phoneme_ids(original_text), dtype=np.int32)
@@ -44,6 +46,8 @@ class LJDatasets(Dataset):
 
         sample = {'text': text, 'mel': mel, 'text_length':text_length, 'mel_length':mel_length}#, 'pos_mel':pos_mel, 'pos_text':pos_text}
 
+        if self.ret_file_names:
+            sample['fname'] = fname
         return sample
 
 class PostDatasets(Dataset):
@@ -98,6 +102,11 @@ def collate_fn_transformer(batch):
         # pos_text = _prepare_data(pos_text).astype(np.int32)
 
         # return t.LongTensor(text), t.FloatTensor(mel), t.FloatTensor(mel_input), t.LongTensor(pos_text), t.LongTensor(pos_mel), t.LongTensor(text_length)
+        if 'fname' in batch[0]:
+            fnames = [d['fname'] for d in batch]
+            fnames = [i for i,_ in sorted(zip(fnames, text_length), key=lambda x: x[1], reverse=True)]
+            return (t.as_tensor(text, dtype=t.long), t.as_tensor(mel, dtype=t.float), \
+                t.as_tensor(text_length, dtype=t.long), t.as_tensor(mel_length, dtype=t.long)), fnames
 
         return t.as_tensor(text, dtype=t.long), t.as_tensor(mel, dtype=t.float), \
             t.as_tensor(text_length, dtype=t.long), t.as_tensor(mel_length, dtype=t.long)
@@ -143,8 +152,8 @@ def get_param_size(model):
         params += tmp
     return params
 
-def get_dataset(split_file):
-    return LJDatasets(os.path.join(data_path,split_file), os.path.join(data_path,'wavs'))
+def get_dataset(split_file, ret_file_names=False):
+    return LJDatasets(os.path.join(data_path,split_file), os.path.join(data_path,'wavs'), ret_file_names=ret_file_names)
 
 def get_post_dataset():
     return PostDatasets(os.path.join(data_path,'metadata.csv'), os.path.join(data_path,'wavs'))
