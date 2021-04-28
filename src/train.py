@@ -329,16 +329,13 @@ def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type, 
     return d_batch
 
 def discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=False):
-    d_loss = 0
+    d_hid, d_len, d_target = d_batch
     if freeze_discriminator:
         with torch.no_grad():
-            d_hid, d_len, d_target = d_batch
             d_out = model.discriminator(d_hid, d_len)
-            d_loss += discriminator_loss(d_out, d_target)
     else:
-        d_hid, d_len, d_target = d_batch
         d_out = model.discriminator(d_hid, d_len)
-        d_loss += discriminator_loss(d_out, d_target)
+    d_loss = discriminator_loss(d_out, d_target)
     return d_loss, (d_out, d_target)
 
 def discriminator_step(model, batch, args):
