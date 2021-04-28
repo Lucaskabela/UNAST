@@ -134,7 +134,7 @@ def get_teacher_ratio(args):
     return TeacherRatio(args)
 
 # Next two methods courtesy of: https://towardsdatascience.com/how-to-save-and-load-a-model-in-pytorch-with-a-complete-example-c2920e617dee
-def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path, epoch_save=False):
+def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path, temporary_save=False, epoch_save=False):
     """
     state: checkpoint we want to save.  State is a dict with keys:
             ['epoch','valid_loss_min', 'state_dict', 'optimizer']
@@ -153,6 +153,11 @@ def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path, epoc
     }
 
     # save checkpoint data to the path given, checkpoint_path
+    if temporary_save:
+        f_path = checkpoint_path + '/model_temporary.ckpt'
+        torch.save(state, f_path)
+        return
+
     if epoch_save:
         f_path = checkpoint_path + f'/model_{epoch}.ckpt'
         torch.save(state, f_path)

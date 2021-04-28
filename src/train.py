@@ -639,7 +639,7 @@ def train(args):
         #model.teacher.step()
 
         # Pre-save to avoid losing epoch when errors in evaluation
-        save_ckp(epoch, 300.0, model, optimizer, False, args.checkpoint_path)
+        save_ckp(epoch, 300.0, model, optimizer, False, args.checkpoint_path, temporary_save=True)
 
         # Eval
         step = (epoch + 1)*epoch_steps*max_obj_steps - 1
