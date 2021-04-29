@@ -520,7 +520,7 @@ def evaluate(model, valid_dataloader, step, args):
                 losses['dis'].append(d_loss.detach().item())
 
             text_pred, text_pred_len = model.asr(None, None, mel, mel_len, infer=True)
-            per += compute_per(text, text_pred.squeeze(-1), text_len, text_pred_len)
+            per += compute_per(text, text_pred, text_len, text_pred_len)
             n_iters += 1
 
         # TODO: evaluate speech inference somehow?
