@@ -330,11 +330,7 @@ def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type, 
 
 def discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=False):
     d_hid, d_len, d_target = d_batch
-    if freeze_discriminator:
-        with torch.no_grad():
-            d_out = model.discriminator(d_hid, d_len)
-    else:
-        d_out = model.discriminator(d_hid, d_len)
+    d_out = model.discriminator(d_hid, d_len)
     d_loss = discriminator_loss(d_out, d_target)
     return d_loss, (d_out, d_target)
 
@@ -573,11 +569,9 @@ def train(args):
         for s in bar:
             model.train()
 
-            # if args.use_discriminator:
-            #     # need to freeze the disciminator first
-            #     freeze_model_parameters(model.discriminator)
-            #     unfreeze_model_parameters(model.text_m)
-            #     unfreeze_model_parameters(model.speech_m)
+            if args.use_discriminator:
+                # need to freeze the disciminator first
+                freeze_model_parameters(model.discriminator)
 
             # DENOISING AUTO ENCODER
             for si in range(0, args.ae_steps):
@@ -602,9 +596,7 @@ def train(args):
 
             # DISCRIMINATOR
             if args.use_discriminator:
-                # unfreeze_model_parameters(model.discriminator)
-                # freeze_model_parameters(model.text_m)
-                # freeze_model_parameters(model.speech_m)
+                unfreeze_model_parameters(model.discriminator)
                 for si in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
                     step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
