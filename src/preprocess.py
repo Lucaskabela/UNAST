@@ -53,7 +53,7 @@ class LJDatasets(Dataset):
 class PostDatasets(Dataset):
     """LJSpeech dataset."""
 
-    def __init__(self, csv_file, root_dir):
+    def __init__(self, csv_file, root_dir, no_mags=False):
         """
         Args:
             csv_file (string): Path to the csv file with annotations.
@@ -62,14 +62,19 @@ class PostDatasets(Dataset):
         """
         self.landmarks_frame = pd.read_csv(csv_file, sep='|', header=None)
         self.root_dir = root_dir
+        self.no_mags = no_mags
 
     def __len__(self):
         return len(self.landmarks_frame)
 
     def __getitem__(self, idx):
         wav_name = os.path.join(self.root_dir, self.landmarks_frame.loc[idx, 0]) + '.wav'
+        fname = wav_name[:-4]
         mel = np.load(wav_name[:-4] + '.pt.npy')
-        mag = np.load(wav_name[:-4] + '.mag.npy')
+        if self.no_mags:
+            return {'mel': mel, 'fname': fname}
+        else:
+            mag = np.load(wav_name[:-4] + '.mag.npy')
         sample = {'mel':mel, 'mag':mag}
 
         return sample
@@ -121,13 +126,18 @@ def collate_fn_postnet(batch):
     if isinstance(batch[0], collections.Mapping):
 
         mel = [d['mel'] for d in batch]
-        mag = [d['mag'] for d in batch]
 
         # PAD sequences with largest length of the batch
         mel = _pad_mel(mel)
-        mag = _pad_mel(mag)
 
-        return t.as_tensor(mel, dtype=t.float), t.as_tensor(mag, dtype=t.float)
+        if 'mag' in batch[0]:
+            mag = [d['mag'] for d in batch]
+            mag = _pad_mel(mag)
+            return t.as_tensor(mel, dtype=t.float), t.as_tensor(mag, dtype=t.float)
+        elif 'fname' in batch[0]:
+            fnames = [d['fname'] for d in batch]
+            return t.as_tensor(mel, dtype=t.float), fnames
+        return t.as_tensor(mel, dtype=t.float)
 
     raise TypeError(("batch must contain tensors, numbers, dicts or lists; found {}"
                      .format(type(batch[0]))))
@@ -158,6 +168,9 @@ def get_dataset(split_file, ret_file_names=False):
 
 def get_post_dataset():
     return PostDatasets(os.path.join(data_path,'metadata.csv'), os.path.join(data_path,'wavs'))
+
+def get_test_mel_dataset(mels_dir):
+    return PostDatasets(os.path.join(mels_dir,'test.csv'), os.path.join(mels_dir), no_mags=True)
 
 def _pad_mel(inputs):
     _pad = 0
