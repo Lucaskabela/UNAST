@@ -639,6 +639,13 @@ def train(args):
         log_loss_metrics(losses, epoch)
         log_loss_metrics(eval_losses, epoch, eval=True)
 
+        # Save
+        save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
+        print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
+        if per < best:
+            print("\t Best score - saving model!")
+            best = per
+
         # Log eval example to tensorboard
         if WRITER:
             idx = np.random.randint(0, len(val_dataset))
@@ -648,14 +655,9 @@ def train(args):
                 WRITER.add_scalar(f"eval/{key_}_loss", np.mean(loss), step)
             WRITER.add_scalar(f"eval/per", per, step)
 
-        # Save
-        print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
+        # Save per epoch
         if args.save_every is not None and (epoch + 1) % args.save_every == 0:
             save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path, epoch_save=True)
-        if per < best:
-            print("\t Best score - saving model!")
-            save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
-            best = per
 
     model.eval()
     return model
