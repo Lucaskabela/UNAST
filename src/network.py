@@ -402,9 +402,7 @@ class SpeechRNN(AutoEncoderNet):
         return pre_pred, post_pred, stop_pred
 
 def generate_square_subsequent_mask(sz, DEVICE):
-    mask = (torch.triu(torch.ones((sz, sz), device=DEVICE)) == 1).transpose(0, 1)
-    mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-    return mask
+    return (torch.triu(torch.ones((sz, sz), device=DEVICE)) != 1).transpose(0, 1)
 
 def create_mask(x, x_lens, enc=True):
     max_seq_len = x.shape[1]
@@ -434,6 +432,11 @@ class TextTransformer(AutoEncoderNet):
         pre_in = self.prenet.forward_fcn(embedded_phonemes)
         return self.pos_emb(pre_in), (input_mask, input_pad_mask)
 
+    def preprocess_decode(self, input_, input_lens, enc=True, noise_in=False):
+        input_mask, input_pad_mask = create_mask(input_, input_lens, enc=enc)
+        embedded_phonemes = self.prenet.emb_dropout(self.prenet.embed(input_))
+        return self.pos_emb(embedded_phonemes), (input_mask, input_pad_mask)
+
     def encode(self, input_, input_lens, noise_in=False):
         embedded_input, (input_mask, input_pad_mask) = self.preprocess(input_,
             input_lens, noise_in=noise_in)
@@ -442,7 +445,7 @@ class TextTransformer(AutoEncoderNet):
 
     def decode(self, tgt, tgt_lens, tgt_pad_mask, enc_outputs, enc_mask):
         tgt_mask = generate_square_subsequent_mask(tgt.shape[1], tgt.device)
-        embedded_tgt = self.pos_emb(self.prenet(tgt))
+        embedded_tgt = self.pos_emb(self.prenet.emb_dropout(self.prenet.embed(tgt)))
         out = self.decoder(embedded_tgt, enc_outputs, tgt_mask, tgt_key_padding_mask=tgt_pad_mask, memory_key_padding_mask=enc_mask)
         return self.postprocess(out[:, -1, :].unsqueeze(1))
 
@@ -483,7 +486,7 @@ class TextTransformer(AutoEncoderNet):
         sos = torch.as_tensor([SOS_IDX for i in range(0, tgt.shape[0])], device=enc_outputs.device, dtype=torch.long).unsqueeze(1)
         tgt_input = torch.cat([sos, tgt[:, :-1]], dim=1)
 
-        embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess(tgt_input, tgt_lens, enc=False)
+        embedded_tgt, (tgt_mask, tgt_pad_mask) = self.preprocess_decode(tgt_input, tgt_lens, enc=False)
         outs = self.decoder(embedded_tgt, enc_outputs, tgt_mask, None,
                                         tgt_pad_mask, input_pad_mask)
 
@@ -619,3 +622,34 @@ class TextRNN(AutoEncoderNet):
         if ret_enc_hid:
             return pred, encoder_outputs
         return pred
+
+
+class Vocoder(nn.Module):
+    """
+    CBHG Network, copied from Transformer-TTS.
+
+    Uses a CBHG network to convert mel-spectrogram to the
+    magnitude spectrogram, which is then converted to wavs.
+    """
+    def __init__(self, num_mels, hidden_size, num_fft):
+        """
+        :param num_mels: Number of mel filters
+        :param hidden_size: Convolution hidden channels
+        :param num_fft: Number of FFTs
+        """
+        super(Vocoder, self).__init__()
+        self.pre_projection = Conv(num_mels, hidden_size)
+        self.cbhg = CBHG(hidden_size)
+        self.post_projection = Conv(hidden_size, (num_fft // 2) + 1)
+
+    def forward(self, mel):
+        """
+        :param input_: Tensor of saved mel-spectrogram output from SpeechPostNet,
+                       these should be of dimensions [batch, length, num_mels]
+        """
+        mel = mel.transpose(1, 2)
+        mel = self.pre_projection(mel)
+        mel = self.cbhg(mel).transpose(1, 2)
+        mag_pred = self.post_projection(mel).transpose(1, 2)
+
+        return mag_pred

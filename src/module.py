@@ -14,6 +14,7 @@ from utils import PAD_IDX
 
 from data.symbols import symbols
 
+
 class Linear(nn.Module):
     """
     Linear Module copied from Transformer-TTS.
@@ -36,6 +37,7 @@ class Linear(nn.Module):
 
     def forward(self, x):
         return self.linear_layer(x)
+
 
 class Conv(nn.Module):
     """
@@ -69,6 +71,7 @@ class Conv(nn.Module):
     def forward(self, x):
         x = self.conv(x)
         return x
+
 
 class SpeechPrenet(nn.Module):
     """
@@ -226,6 +229,7 @@ class TextPrenet(nn.Module):
         input_ = input_.transpose(1, 2)
         return input_
 
+
 class TextPostnet(nn.Module):
     """
 
@@ -262,6 +266,7 @@ class PositionalEncoding(nn.Module):
         x = x * self.d_model_scale + self.pe[:, :x.size(1), :]
         return self.dropout(x)
 
+
 class TransformerEncoder(nn.Module):
     def __init__(self, ninp, nhead, nhid, dropout, nlayers):
         super(TransformerEncoder, self).__init__()
@@ -274,6 +279,7 @@ class TransformerEncoder(nn.Module):
         memory_out = self.transformer_encoder(src, src_mask, src_pad_mask)
         return memory_out.transpose(0, 1)
 
+
 class TransformerDecoder(nn.Module):
     def __init__(self, ninp, nhead, ffn_dim, dropout, nlayers):
         super(TransformerDecoder, self).__init__()
@@ -285,6 +291,7 @@ class TransformerDecoder(nn.Module):
         memory = memory.transpose(0, 1)
         out = self.transformer_decoder(tgt, memory, tgt_mask, memory_mask, tgt_key_padding_mask, memory_key_padding_mask)
         return out.transpose(0, 1)
+
 
 
 class RNNEncoder(nn.Module):
@@ -327,6 +334,7 @@ class RNNEncoder(nn.Module):
             h_t = (h, c)
 
         return output, h_t
+
 
 
 class RNNDecoder(nn.Module):
@@ -455,6 +463,7 @@ class LocationSensitiveAttention(nn.Module):
         return ctxt
 
 
+
 class LuongGeneralAttention(nn.Module):
     def __init__(self, hidden_size, enc_out_size, attention_dim):
         super(LuongGeneralAttention, self).__init__()
@@ -486,3 +495,132 @@ class LuongGeneralAttention(nn.Module):
         # And we want a [batch_size x 1 x enc_out_size], so we have the right order
         ctxt = torch.bmm(align_weights, enc_output)
         return ctxt
+
+
+class Highwaynet(nn.Module):
+    """
+    Highway network, copied from Transformer-TTS.
+
+    This is used by the CBHG network.
+    """
+    def __init__(self, num_units, num_layers=4):
+        """
+        :param num_units: dimension of hidden unit
+        :param num_layers: # of highway layers
+        """
+        super(Highwaynet, self).__init__()
+        self.num_units = num_units
+        self.num_layers = num_layers
+        self.gates = nn.ModuleList()
+        self.linears = nn.ModuleList()
+        for _ in range(self.num_layers):
+            self.linears.append(Linear(num_units, num_units))
+            self.gates.append(Linear(num_units, num_units))
+
+    def forward(self, input_):
+        out = input_
+
+        # highway gated function
+        for fc1, fc2 in zip(self.linears, self.gates):
+            h = torch.relu(fc1.forward(out))
+            t_ = torch.sigmoid(fc2.forward(out))
+            c = 1. - t_
+            out = h * t_ + out * c
+
+        return out
+
+
+class CBHG(nn.Module):
+    """
+    CBHG Module, copied from Transformer-TTS.
+
+    This is used in the post-processing model for speech synthesis.
+    The mel-spectrograms are passed through this to convert into
+    magnitude spectrograms, which are then converted back to wavs.
+    """
+    def __init__(self, hidden_size, K=16, projection_size=256, num_gru_layers=2, max_pool_kernel_size=2):
+        """
+        :param hidden_size: dimension of hidden unit
+        :param K: # of convolution banks
+        :param projection_size: dimension of projection unit
+        :param num_gru_layers: # of layers of GRUcell
+        :param max_pool_kernel_size: max pooling kernel size
+        """
+        super(CBHG, self).__init__()
+        self.hidden_size = hidden_size
+        self.projection_size = projection_size
+        self.convbank_list = nn.ModuleList()
+        self.convbank_list.append(nn.Conv1d(in_channels=projection_size,
+                                                out_channels=hidden_size,
+                                                kernel_size=1,
+                                                padding=int(np.floor(1/2))))
+
+        for i in range(2, K+1):
+            self.convbank_list.append(nn.Conv1d(in_channels=hidden_size,
+                                                out_channels=hidden_size,
+                                                kernel_size=i,
+                                                padding=int(np.floor(i/2))))
+
+        self.batchnorm_list = nn.ModuleList()
+        for i in range(1, K+1):
+            self.batchnorm_list.append(nn.BatchNorm1d(hidden_size))
+
+        convbank_outdim = hidden_size * K
+
+        self.conv_projection_1 = nn.Conv1d(in_channels=convbank_outdim,
+                                             out_channels=hidden_size,
+                                             kernel_size=3,
+                                             padding=int(np.floor(3 / 2)))
+        self.conv_projection_2 = nn.Conv1d(in_channels=hidden_size,
+                                               out_channels=projection_size,
+                                               kernel_size=3,
+                                               padding=int(np.floor(3 / 2)))
+        self.batchnorm_proj_1 = nn.BatchNorm1d(hidden_size)
+
+        self.batchnorm_proj_2 = nn.BatchNorm1d(projection_size)
+
+
+        self.max_pool = nn.MaxPool1d(max_pool_kernel_size, stride=1, padding=1)
+        self.highway = Highwaynet(self.projection_size)
+        self.gru = nn.GRU(self.projection_size, self.hidden_size // 2, num_layers=num_gru_layers,
+                          batch_first=True,
+                          bidirectional=True)
+
+
+    def _conv_fit_dim(self, x, kernel_size=3):
+        if kernel_size % 2 == 0:
+            return x[:,:,:-1]
+        else:
+            return x
+
+    def forward(self, input_):
+        input_ = input_.contiguous()
+        batch_size = input_.size(0)
+        total_length = input_.size(-1)
+
+        convbank_list = list()
+        convbank_input = input_
+
+        # Convolution bank filters
+        for k, (conv, batchnorm) in enumerate(zip(self.convbank_list, self.batchnorm_list)):
+            convbank_input = torch.relu(batchnorm(self._conv_fit_dim(conv(convbank_input), k+1).contiguous()))
+            convbank_list.append(convbank_input)
+
+        # Concatenate all features
+        conv_cat = torch.cat(convbank_list, dim=1)
+
+        # Max pooling
+        conv_cat = self.max_pool(conv_cat)[:,:,:-1]
+
+        # Projection
+        conv_projection = torch.relu(self.batchnorm_proj_1(self._conv_fit_dim(self.conv_projection_1(conv_cat))))
+        conv_projection = self.batchnorm_proj_2(self._conv_fit_dim(self.conv_projection_2(conv_projection))) + input_
+
+        # Highway networks
+        highway = self.highway.forward(conv_projection.transpose(1,2))
+
+        # Bidirectional GRU
+        self.gru.flatten_parameters()
+        out, _ = self.gru(highway)
+
+        return out
