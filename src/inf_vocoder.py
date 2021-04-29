@@ -21,7 +21,7 @@ def initialize(args):
     set_seed(args.seed)
 
     # Dataset
-    dataset = get_test_mel_dataset(args.out_test_dir)
+    dataset = get_test_mel_dataset(os.path.join(args.out_test_dir, 'mels') , args.audio_list_file)
 
     # Model
     model = Vocoder(args.num_mels, args.hidden_size, args.n_fft)

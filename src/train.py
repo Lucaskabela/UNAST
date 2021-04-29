@@ -479,8 +479,8 @@ def evaluate(model, valid_dataloader, step, args, is_test=False):
             ASR loss, and TTS loss, cross model text and cross model speech loss.
     """
     if is_test:
-        if not os.path.exists(args.out_test_dir):
-            os.makedirs(args.out_test_dir)
+        if not os.path.exists(os.path.join(args.out_test_dir, 'mels')):
+            os.makedirs(os.path.join(args.out_test_dir, 'mels'))
     model.eval()
     with torch.no_grad():
         losses = defaultdict(list)
@@ -550,7 +550,7 @@ def evaluate(model, valid_dataloader, step, args, is_test=False):
                 for pred, stop_len, fname in zip(post_pred, stop_lens, fnames):
                     pred = pred.numpy()
                     stop_len = stop_len.item()
-                    np.save(os.path.join(args.out_test_dir, fname + '.pt'), pred[:stop_len])
+                    np.save(os.path.join(args.out_test_dir, 'mels', fname + '.pt'), pred[:stop_len])
 
         # TODO: evaluate speech inference somehow?
         compare_outputs(text[-1][:], text_pred[-1][:], text_len[-1], text_pred_len[-1])

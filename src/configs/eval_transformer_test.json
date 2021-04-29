@@ -1,5 +1,4 @@
 {
-    "is_eval_test": true,
     "seed": 0,
     "epochs": 100,
     "lr": 0.0625,
@@ -21,7 +20,6 @@
     "d_steps": 1,
     "checkpoint_path": "./checkpoint/transformer_b16_transformer_sched",
     "sample_path": "./samples/transformer_b16_transformer_sched",
-    "out_test_dir": "./out_test/eval_transformer_test",
     "tb_log_path": "./log_tb/transformer_b16_transformer_sched",
     "num_mels": 80,
     "n_fft": 2048,
@@ -50,5 +48,8 @@
     "disc_num_layers": 2,
     "use_gpu": true,
     "optim_type": "adamw",
-    "model_type": "transformer"
+    "model_type": "transformer",
+    "is_eval_test": true,
+    "out_test_dir": "./out_test/eval_transformer_test",
+    "audio_list_file": "/scratch/cluster/billyang/ljspeech_dataset/LJSpeech-1.1/test.csv"
 }

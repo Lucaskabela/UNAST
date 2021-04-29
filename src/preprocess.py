@@ -170,8 +170,8 @@ def get_dataset(split_file, ret_file_names=False):
 def get_post_dataset():
     return PostDatasets(os.path.join(data_path,'metadata.csv'), os.path.join(data_path,'wavs'))
 
-def get_test_mel_dataset(mels_dir):
-    return PostDatasets(os.path.join(mels_dir,'test.csv'), os.path.join(mels_dir), is_inf=True)
+def get_test_mel_dataset(mels_dir, audio_list_file):
+    return PostDatasets(audio_list_file, mels_dir, is_inf=True)
 
 def _pad_mel(inputs):
     _pad = 0
