@@ -9,7 +9,6 @@ from utils import *
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
 from network import TextRNN, SpeechRNN, TextTransformer, SpeechTransformer, UNAST, Discriminator, LSTMDiscriminator
-from eval import *
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn.utils.rnn import pad_sequence
