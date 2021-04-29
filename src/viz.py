@@ -3,6 +3,7 @@ from train import *
 from network import *
 from sklearn.preprocessing import StandardScaler
 from sklearn.decomposition import PCA
+import numpy
 
 def process_batch(batch):
     # Pos_text is unused so don't even bother loading it up
@@ -14,7 +15,7 @@ def process_batch(batch):
 
     return (text, mel, text_len, mel_len), (None)
 
-def twod_viz(args, model=None, num_points=5):
+def twod_viz(args, model=None, num_points=300, to_keep=5):
 
     test_dataset = get_dataset('test.csv')
     test_dataloader = DataLoader(test_dataset,
@@ -51,15 +52,19 @@ def twod_viz(args, model=None, num_points=5):
 
     # Refit so we can visualize
     print(principalComponents)
-    to_keep = 5
     # Find the 5 with the greatest seperation!
     texts = principalComponents[:num_points]
     speech = principalComponents[num_points:]
-    dist = numpy.linalg.norm(texts-speech)
+    dist = numpy.sqrt(numpy.sum((texts-speech)**2, axis=1))
+    print(dist)
     indices = (-dist).argsort()[:to_keep]
-    final_points = np.concatenate([texts[indices], speech[num_points + indices]])
+    print(indices)
+    final_points = np.concatenate([texts[indices], speech[indices]])
+    print(final_points.shape)
     refit = StandardScaler().fit_transform(final_points)
-
+    # Note at this point there might be too much clustering, due to huge reduction - so add noise!
+    noise = np.random.normal(0, .1, refit.shape)
+    refit = refit + noise
     # We should now have a 2 * num_points x 2 array
 
 
@@ -72,14 +77,15 @@ def twod_viz(args, model=None, num_points=5):
     for idx, cl in enumerate(np.unique(labels)):
         plt.scatter(x=x[idx * to_keep : (idx + 1) * to_keep ],
                     y=y[idx * to_keep : (idx + 1) * to_keep ],
-                    label=cl,)
+                    label=cl,
+                    marker='x')
     i = 0
     for x, y in zip(x, y):
         plt.text(x, y, str(i % to_keep), fontsize=12)
         i += 1
     plt.legend(loc='upper right')
-    plt.xlim(-2.75, 2.75)
-    plt.ylim(-2.75, 2.75)
+    # plt.xlim(-2.75, 2.75)
+    # plt.ylim(-2.75, 2.75)
     plt.xlabel("Dim 1")
     plt.ylabel("Dim 2")
     plt.title("TITLE GOES HERE")
