@@ -49,14 +49,13 @@ def make_mags(args):
     pbar = tqdm(dataloader)
     with torch.no_grad():
         for i, data in enumerate(pbar):
-            mel, fnames = data
+            mel, mel_lens, fnames = data
             mel = mel.to(DEVICE)
 
             mag_preds = model.forward(mel)
-            #TODO: might need to handle padding at this point
 
-            for mag, fname in zip(mag_preds, fnames):
-                np.save(os.path.join(fname + '.mag'), mag.cpu().numpy())
+            for mag, mel_len, fname in zip(mag_preds, mel_lens, fnames):
+                np.save(os.path.join(fname + '.mag'), mag.cpu().numpy()[:mel_len])
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
