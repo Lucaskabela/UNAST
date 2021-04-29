@@ -27,6 +27,12 @@ def initialize(args):
     model = Vocoder(args.num_mels, args.hidden_size, args.n_fft)
     model = model.to(DEVICE)
 
+    optimizer = None
+    if args.optim_type == 'adam':
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    elif args.optim_type == 'adamw':
+        optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+
     # Continue training
     s_epoch = 0
     if args.load_path is not None:
