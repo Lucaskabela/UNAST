@@ -9,6 +9,7 @@ from utils import *
 from preprocess import get_dataset, DataLoader, collate_fn_transformer
 from module import TextPrenet, TextPostnet, RNNDecoder, RNNEncoder
 from network import TextRNN, SpeechRNN, TextTransformer, SpeechTransformer, UNAST, Discriminator, LSTMDiscriminator
+from eval import *
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
 from torch.nn.utils.rnn import pad_sequence
@@ -471,19 +472,30 @@ def unfreeze_model_parameters(model):
         param.requires_grad = True
 
 #####----- Train and evaluate -----#####
-def evaluate(model, valid_dataloader, step, args):
+def evaluate(model, valid_dataloader, step, args, is_test=False):
     """
         Expect validation set to have paired speech & text!
         Primary evaluation is PER - can gauge training by the other losses
         We return on 6 other metrics:  autoencoder text loss, autoencoder speech loss,
             ASR loss, and TTS loss, cross model text and cross model speech loss.
     """
+    if is_test:
+        if not os.path.exists(args.out_test_dir):
+            os.makedirs(args.out_test_dir)
     model.eval()
     with torch.no_grad():
         losses = defaultdict(list)
-        per, n_iters = 0, 0
+        per, n_iters, d_score = 0, 0, 0
+        text_pred_dict = {}
+        if is_test:
+            bar = tqdm(valid_dataloader)
+        else:
+            # probably training and don't want to have nested tdqm
+            bar = valid_dataloader
 
-        for batch in valid_dataloader:
+        for batch in bar:
+            if is_test:
+                batch, fnames = batch
             batch = process_batch(batch)
             x, _ = batch
             text, mel, text_len, mel_len = x
@@ -518,16 +530,38 @@ def evaluate(model, valid_dataloader, step, args):
             if args.use_discriminator:
                 d_loss, d_output = discriminator_step(model, batch, args)
                 losses['dis'].append(d_loss.detach().item())
+                if is_test:
+                    d_score += compute_d_score(d_output[0], d_output[1]) / args.eval_batch_size / 2
 
             text_pred, text_pred_len = model.asr(None, None, mel, mel_len, infer=True)
             per += compute_per(text, text_pred, text_len, text_pred_len)
             n_iters += 1
+            
+            if is_test:
+                text_pred = text_pred.detach().cpu()
+                text_pred_len = text_pred_len.detach().cpu()
+                for gt, gt_len, pred, pred_len, fname in zip(text, text_len, text_pred, text_pred_len, fnames):
+                    gt_len = gt_len.item()
+                    pred_len = pred_len.item()
+                    text_pred_dict[fname] = {'gt': gt.tolist()[:gt_len], 'pred': pred.tolist()[:pred_len]}
+
+                _, post_pred, _, stop_lens = model.tts(text, text_len, None, None, infer=True)
+                post_pred = post_pred.detach().cpu()
+                stop_lens = stop_lens.detach().cpu()
+                for pred, stop_len, fname in zip(post_pred, stop_lens, fnames):
+                    pred = pred.numpy()
+                    stop_len = stop_len.item()
+                    np.save(os.path.join(args.out_test_dir, fname + '.pt'), pred[:stop_len])
 
         # TODO: evaluate speech inference somehow?
         compare_outputs(text[-1][:], text_pred[-1][:], text_len[-1], text_pred_len[-1])
         if args.use_discriminator:
             d_out, d_target = d_output
             log_tb_discrim_out(d_out, d_target, step, "eval")
+
+    if is_test:
+        json.dump(text_pred_dict, open(os.path.join(args.out_test_dir, 'text_preds.json'), 'w'))
+        return per/n_iters, losses, d_score/n_iters
 
     return per/n_iters, losses
 
@@ -941,6 +975,28 @@ def initialize_datasets(args):
 
     return supervised_train_dataset, unsupervised_train_dataset, val_dataset, full_train_dataset
 
+####---- Test Set Evaluation methods ----####
+def compute_d_score(outputs, targets):
+    outputs = torch.sigmoid(outputs)
+    outputs = torch.round(outputs)
+    targets = torch.round(targets)
+    score = torch.sum(outputs == targets)
+    return score
+
+def evaluate_main(args):
+    set_seed(args.seed)
+    assert 300 % args.eval_batch_size == 0, "Eval batch size {} must divide the length of the test set (300) perfectly for the dataloader".format(args.eval_batch_size)
+    print("#### Getting Dataset ####")
+    test_dataset = get_dataset('test.csv', ret_file_names=True)
+    test_dataloader = DataLoader(test_dataset,
+            batch_size=args.eval_batch_size, shuffle=False,
+            collate_fn=collate_fn_transformer, drop_last=True,
+            num_workers=args.num_workers, pin_memory=True)
+    s_epoch, _, model, _, _ = initialize_model(args)
+    per, eval_losses, d_score = evaluate(model, test_dataloader, s_epoch, args, is_test=True)
+    log_loss_metrics(eval_losses, s_epoch, eval=True)
+    print("per : {}".format(per))
+    print("d_score : {}".format(d_score))
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -956,7 +1012,12 @@ if __name__ == "__main__":
         WRITER = SummaryWriter(log_dir=args.tb_log_path, flush_secs=60)
         WRITER.add_text("params", str(vars(args)), 0)
 
-    train(args)
+    if args.is_eval_test:
+        print("#### DOING EVALUATION ####")
+        evaluate_main(args)
+    else:
+        print("#### TRAINING ####")
+        train(args)
 
     if WRITER:
         WRITER.close()

@@ -33,7 +33,7 @@ class LJDatasets(Dataset):
 
     def __getitem__(self, idx):
         wav_name = os.path.join(self.root_dir, self.landmarks_frame.loc[idx, 0]) + '.wav'
-        fname = wav_name[:-4]
+        fname = wav_name[wav_name.rindex('/') + 1:-4]
         original_text = self.landmarks_frame.loc[idx, 1]
 
         text = np.asarray(raw_text_to_phoneme_ids(original_text), dtype=np.int32)
@@ -86,6 +86,9 @@ def collate_fn_transformer(batch):
         text_length = [d['text_length'] for d in batch]
         # pos_mel = [d['pos_mel'] for d in batch]
         # pos_text= [d['pos_text'] for d in batch]
+        if 'fname' in batch[0]:
+            fnames = [d['fname'] for d in batch]
+            fnames = [i for i, _ in sorted(zip(fnames, text_length), key=lambda x: x[1], reverse=True)]
 
         text = [i for i,_ in sorted(zip(text, text_length), key=lambda x: x[1], reverse=True)]
         mel = [i for i, _ in sorted(zip(mel, text_length), key=lambda x: x[1], reverse=True)]
@@ -103,8 +106,6 @@ def collate_fn_transformer(batch):
 
         # return t.LongTensor(text), t.FloatTensor(mel), t.FloatTensor(mel_input), t.LongTensor(pos_text), t.LongTensor(pos_mel), t.LongTensor(text_length)
         if 'fname' in batch[0]:
-            fnames = [d['fname'] for d in batch]
-            fnames = [i for i,_ in sorted(zip(fnames, text_length), key=lambda x: x[1], reverse=True)]
             return (t.as_tensor(text, dtype=t.long), t.as_tensor(mel, dtype=t.float), \
                 t.as_tensor(text_length, dtype=t.long), t.as_tensor(mel_length, dtype=t.long)), fnames
 
