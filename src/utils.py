@@ -3,6 +3,7 @@ Contains any and all code we didnt want to put somewhere else
 '''
 import torch
 import numpy as np
+import copy
 import random
 import librosa
 import audio_parameters as ap
@@ -11,6 +12,7 @@ import sys
 import torch.utils.tensorboard as tb
 import shutil
 from jiwer import wer
+from scipy import signal
 from data import sequence_to_text
 import os
 
@@ -134,7 +136,7 @@ def get_teacher_ratio(args):
     return TeacherRatio(args)
 
 # Next two methods courtesy of: https://towardsdatascience.com/how-to-save-and-load-a-model-in-pytorch-with-a-complete-example-c2920e617dee
-def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path, epoch_save=False):
+def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path, temporary_save=False, epoch_save=False):
     """
     state: checkpoint we want to save.  State is a dict with keys:
             ['epoch','valid_loss_min', 'state_dict', 'optimizer']
@@ -153,6 +155,11 @@ def save_ckp(epoch, valid_loss, model, optimizer, is_best, checkpoint_path, epoc
     }
 
     # save checkpoint data to the path given, checkpoint_path
+    if temporary_save:
+        f_path = checkpoint_path + '/model_temporary.ckpt'
+        torch.save(state, f_path)
+        return
+
     if epoch_save:
         f_path = checkpoint_path + f'/model_{epoch}.ckpt'
         torch.save(state, f_path)
@@ -221,6 +228,10 @@ def parse_with_config(parser):
     del args.config
     return args
 
+
+###### CODE BELOW ARE TAKEN FROM Transformer-TTS ######
+
+
 def get_spectrograms(fpath):
     '''Parse the wave file in `fpath` and
     Returns normalized melspectrogram and linear spectrogram.
@@ -265,3 +276,53 @@ def get_spectrograms(fpath):
     mag = mag.T.astype(np.float32)  # (T, 1+n_fft//2)
 
     return mel, mag
+
+
+def spectrogram2wav(mag):
+    '''# Generate wave file from linear magnitude spectrogram using Griffin-Lim
+    Args:
+      mag: A numpy array of (T, 1+n_fft//2)
+    Returns:
+      wav: A 1-D numpy array.
+    '''
+    # transpose
+    mag = mag.T
+
+    # de-noramlize
+    mag = (np.clip(mag, 0, 1) * ap.max_db) - ap.max_db + ap.ref_db
+
+    # to amplitude
+    mag = np.power(10.0, mag * 0.05)
+
+    # wav reconstruction
+    wav = griffin_lim(mag**ap.power)
+
+    # de-preemphasis
+    wav = signal.lfilter([1], [1, -ap.preemphasis], wav)
+
+    # trim
+    wav, _ = librosa.effects.trim(wav)
+
+    return wav.astype(np.float32)
+
+
+def griffin_lim(spectrogram):
+    '''Applies Griffin-Lim's raw.'''
+    X_best = copy.deepcopy(spectrogram)
+    for i in range(ap.n_iter):
+        X_t = invert_spectrogram(X_best)
+        est = librosa.stft(X_t, ap.n_fft, ap.hop_length, win_length=ap.win_length)
+        phase = est / np.maximum(1e-8, np.abs(est))
+        X_best = spectrogram * phase
+    X_t = invert_spectrogram(X_best)
+    y = np.real(X_t)
+
+    return y
+
+
+def invert_spectrogram(spectrogram):
+    '''Applies inverse fft.
+    Args:
+      spectrogram: [1+n_fft//2, t]
+    '''
+    return librosa.istft(spectrogram, ap.hop_length, win_length=ap.win_length, window="hann")

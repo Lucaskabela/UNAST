@@ -293,7 +293,7 @@ def crossmodel_step(model, batch, args, use_dis_loss=False):
         return t_cm_loss, s_cm_loss, d_cm_loss
     return t_cm_loss, s_cm_loss
 
-def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type):
+def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type, train_discriminator=False):
     if model_type == 'rnn':
         _, t_out = t_hid
         _, s_out = s_hid
@@ -316,6 +316,8 @@ def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type):
     # Concatenate
     d_len = torch.cat([t_hid_len, s_hid_len], dim=0)
     d_target = torch.cat([t_target, s_target], dim=0)
+    if not train_discriminator:
+        d_target = 1 - d_target
 
     # Shuffle
     indices = torch.randperm(d_hid.shape[0])
@@ -327,16 +329,9 @@ def discriminator_shuffle_batch(t_hid, t_hid_len, s_hid, s_hid_len, model_type):
     return d_batch
 
 def discriminator_hidden_to_loss(model, d_batch, freeze_discriminator=False):
-    d_loss = 0
-    if freeze_discriminator:
-        with torch.no_grad():
-            d_hid, d_len, d_target = d_batch
-            d_out = model.discriminator(d_hid, d_len)
-            d_loss += discriminator_loss(d_out, d_target)
-    else:
-        d_hid, d_len, d_target = d_batch
-        d_out = model.discriminator(d_hid, d_len)
-        d_loss += discriminator_loss(d_out, d_target)
+    d_hid, d_len, d_target = d_batch
+    d_out = model.discriminator(d_hid, d_len)
+    d_loss = discriminator_loss(d_out, d_target)
     return d_loss, (d_out, d_target)
 
 def discriminator_step(model, batch, args):
@@ -350,7 +345,7 @@ def discriminator_step(model, batch, args):
 
     # quick check to determine between rnn and transformer
     # eventually should be built into the RNN and Transformer Encoder classes
-    d_batch = discriminator_shuffle_batch(t_enc_out, text_len, s_enc_out, mel_len, args.model_type)
+    d_batch = discriminator_shuffle_batch(t_enc_out, text_len, s_enc_out, mel_len, args.model_type, train_discriminator=True)
     d_loss, d_output = discriminator_hidden_to_loss(model, d_batch)
 
     # Check loss is not NaN
@@ -525,7 +520,7 @@ def evaluate(model, valid_dataloader, step, args):
                 losses['dis'].append(d_loss.detach().item())
 
             text_pred, text_pred_len = model.asr(None, None, mel, mel_len, infer=True)
-            per += compute_per(text, text_pred.squeeze(-1), text_len, text_pred_len)
+            per += compute_per(text, text_pred, text_len, text_pred_len)
             n_iters += 1
 
         # TODO: evaluate speech inference somehow?
@@ -556,14 +551,15 @@ def train(args):
 
     s_epoch, best, model, optimizer, scheduler = initialize_model(args)
 
-    print("Training model with {} parameters".format(model.num_params()))
-    per, eval_losses = evaluate(model, valid_dataloader, -1, args)
-    log_loss_metrics(eval_losses, -1, eval=True)
-
     max_obj_steps = max(args.ae_steps, args.cm_steps, args.sp_steps)
     if args.use_discriminator:
         max_obj_steps = max(max_obj_steps, args.d_steps)
     accum_steps = args.ae_steps + args.cm_steps + args.sp_steps
+
+    print("Training model with {} parameters".format(model.num_params()))
+    step = s_epoch*args.epoch_steps*max_obj_steps - 1
+    per, eval_losses = evaluate(model, valid_dataloader, step, args)
+    log_loss_metrics(eval_losses, s_epoch-1, eval=True)
 
     for epoch in range(s_epoch, args.epochs):
         losses = defaultdict(list)
@@ -573,11 +569,9 @@ def train(args):
         for s in bar:
             model.train()
 
-            # if args.use_discriminator:
-            #     # need to freeze the disciminator first
-            #     freeze_model_parameters(model.discriminator)
-            #     unfreeze_model_parameters(model.text_m)
-            #     unfreeze_model_parameters(model.speech_m)
+            if args.use_discriminator:
+                # need to freeze the disciminator first
+                freeze_model_parameters(model.discriminator)
 
             # DENOISING AUTO ENCODER
             for si in range(0, args.ae_steps):
@@ -602,9 +596,7 @@ def train(args):
 
             # DISCRIMINATOR
             if args.use_discriminator:
-                # unfreeze_model_parameters(model.discriminator)
-                # freeze_model_parameters(model.text_m)
-                # freeze_model_parameters(model.speech_m)
+                unfreeze_model_parameters(model.discriminator)
                 for si in range(0, args.d_steps):
                     batch = batch_getter.get_discriminator_batch()
                     step = epoch*epoch_steps*max_obj_steps + s*max_obj_steps + si
@@ -636,11 +628,23 @@ def train(args):
                 step = epoch*epoch_steps*max_obj_steps + (s + 1)*max_obj_steps - 1
                 log_tb_example(model, ex, step)
 
-        # Eval and save
+        #model.teacher.step()
+
+        # Pre-save to avoid losing epoch when errors in evaluation
+        save_ckp(epoch, 300.0, model, optimizer, False, args.checkpoint_path, temporary_save=True)
+
+        # Eval
         step = (epoch + 1)*epoch_steps*max_obj_steps - 1
         per, eval_losses = evaluate(model, valid_dataloader, step, args)
         log_loss_metrics(losses, epoch)
         log_loss_metrics(eval_losses, epoch, eval=True)
+
+        # Save
+        save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
+        print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
+        if per < best:
+            print("\t Best score - saving model!")
+            best = per
 
         # Log eval example to tensorboard
         if WRITER:
@@ -651,14 +655,10 @@ def train(args):
                 WRITER.add_scalar(f"eval/{key_}_loss", np.mean(loss), step)
             WRITER.add_scalar(f"eval/per", per, step)
 
-        model.teacher.step()
-        print("Eval_ epoch {:-3d} PER {:0.3f}\%".format(epoch, per*100))
-        save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path)
+        # Save per epoch
         if args.save_every is not None and (epoch + 1) % args.save_every == 0:
             save_ckp(epoch, per, model, optimizer, per < best, args.checkpoint_path, epoch_save=True)
-        if per < best:
-            print("\t Best score - saving model!")
-            best = per
+
     model.eval()
     return model
 
@@ -903,9 +903,10 @@ def initialize_model(args):
     if args.load_path is not None:
         if os.path.isfile(args.load_path):
             s_epoch, best, model, optimizer = load_ckp(args.load_path, model, optimizer)
+            print(f"[INFO] Training from epoch {s_epoch}.")
         else:
-            print(f"[WARN] Could not find checkpoint '{args.load_path}'.")
-            print(f"[WARN] Training from initial model...")
+            print(f"[INFO] Could not find checkpoint '{args.load_path}'.")
+            print(f"[INFO] Training from initial model.")
 
     # initialize scheduler
     scheduler = None
