@@ -16,7 +16,7 @@
     "hidden_size": 256,
     "n_fft": 2048,
     "checkpoint_path": "./checkpoint/vocoder",
-    "tb_log_path": "./log_tb/vocoder",
+    "tb_log_path": "./log_tb_vocoder",
     "num_workers": 4,
     "load_path": "./checkpoint/vocoder/model_most_recent.ckpt",
     "save_every": 250,
