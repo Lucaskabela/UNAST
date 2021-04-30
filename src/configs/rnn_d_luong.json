@@ -50,6 +50,7 @@
     "load_path": "./checkpoint/rnn_d_b4_a4_luong/model_most_recent.ckpt",
     "save_every": 10,
     "use_gpu": true,
+    "gpu_num": 2,
     "optim_type": "adamw",
     "model_type": "rnn",
     "is_eval_test": false

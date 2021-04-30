@@ -100,7 +100,12 @@ def set_seed(seed):
 
 def init_device(args):
     if torch.cuda.is_available() and args.use_gpu:
-        device = torch.device("cuda")
+        if args.gpu_num is not None and args.gpu_num < torch.cuda.device_count():
+            print(f"Using GPU {args.gpu_num} of the {torch.cuda.device_count()} possible GPUs.")
+            print(f"Device: {torch.cuda.get_device_name(args.gpu_num)}")
+            device = torch.device(f"cuda:{args.gpu_num}")
+        else:
+            device = torch.device("cuda")
     else:
         device = torch.device("cpu")
     return device

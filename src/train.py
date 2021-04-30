@@ -971,6 +971,13 @@ def initialize_datasets(args):
     val_dataset = get_dataset('val.csv')
     full_train_dataset = get_dataset('full_train.csv')
 
+    #supervised_train_dataset = sorted([supervised_train_dataset[i] for i in range(len(supervised_train_dataset))], key=lambda x: x['mel_length'], reverse=True)
+    #print("Done supervised")
+    #unsupervised_train_dataset = sorted([unsupervised_train_dataset[i] for i in range(len(unsupervised_train_dataset))], key=lambda x: x['mel_length'], reverse=True)
+    #print("Done unsupervised")
+    #full_train_dataset = sorted([full_train_dataset[i] for i in range(len(full_train_dataset))], key=lambda x: x['mel_length'], reverse=True)
+    #print("Done full")
+
     # TODO: remove the subsets used for experimentation
     #supervised_train_dataset = torch.utils.data.Subset(supervised_train_dataset, range(100))
     #unsupervised_train_dataset = torch.utils.data.Subset(unsupervised_train_dataset, range(100))
