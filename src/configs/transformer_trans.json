@@ -46,5 +46,6 @@
     "save_every": 10,
     "use_gpu": true,
     "optim_type": "adamw",
-    "model_type": "transformer"
+    "model_type": "transformer",
+    "is_eval_test": false
 }
