@@ -14,7 +14,7 @@ import math
 class LJDatasets(Dataset):
     """LJSpeech dataset."""
 
-    def __init__(self, csv_file, root_dir):
+    def __init__(self, csv_file, root_dir, ret_file_names=False):
         """
         Args:
             csv_file (string): Path to the csv file with annotations.
@@ -23,6 +23,7 @@ class LJDatasets(Dataset):
         """
         self.landmarks_frame = pd.read_csv(csv_file, sep='|', header=None)
         self.root_dir = root_dir
+        self.ret_file_names = ret_file_names
 
     def load_wav(self, filename):
         return librosa.load(filename, sr=ap.sr)
@@ -32,6 +33,7 @@ class LJDatasets(Dataset):
 
     def __getitem__(self, idx):
         wav_name = os.path.join(self.root_dir, self.landmarks_frame.loc[idx, 0]) + '.wav'
+        fname = wav_name[wav_name.rindex('/') + 1:-4]
         original_text = self.landmarks_frame.loc[idx, 1]
 
         text = np.asarray(raw_text_to_phoneme_ids(original_text), dtype=np.int32)
@@ -44,12 +46,14 @@ class LJDatasets(Dataset):
 
         sample = {'text': text, 'mel': mel, 'text_length':text_length, 'mel_length':mel_length}#, 'pos_mel':pos_mel, 'pos_text':pos_text}
 
+        if self.ret_file_names:
+            sample['fname'] = fname
         return sample
 
 class PostDatasets(Dataset):
     """LJSpeech dataset."""
 
-    def __init__(self, csv_file, root_dir):
+    def __init__(self, csv_file, root_dir, is_inf=False):
         """
         Args:
             csv_file (string): Path to the csv file with annotations.
@@ -58,14 +62,19 @@ class PostDatasets(Dataset):
         """
         self.landmarks_frame = pd.read_csv(csv_file, sep='|', header=None)
         self.root_dir = root_dir
+        self.is_inf = is_inf
 
     def __len__(self):
         return len(self.landmarks_frame)
 
     def __getitem__(self, idx):
         wav_name = os.path.join(self.root_dir, self.landmarks_frame.loc[idx, 0]) + '.wav'
+        fname = wav_name[:-4]
         mel = np.load(wav_name[:-4] + '.pt.npy')
-        mag = np.load(wav_name[:-4] + '.mag.npy')
+        if self.is_inf:
+            return {'mel': mel, 'fname': fname}
+        else:
+            mag = np.load(wav_name[:-4] + '.mag.npy')
         sample = {'mel':mel, 'mag':mag}
 
         return sample
@@ -82,6 +91,9 @@ def collate_fn_transformer(batch):
         text_length = [d['text_length'] for d in batch]
         # pos_mel = [d['pos_mel'] for d in batch]
         # pos_text= [d['pos_text'] for d in batch]
+        if 'fname' in batch[0]:
+            fnames = [d['fname'] for d in batch]
+            fnames = [i for i, _ in sorted(zip(fnames, text_length), key=lambda x: x[1], reverse=True)]
 
         text = [i for i,_ in sorted(zip(text, text_length), key=lambda x: x[1], reverse=True)]
         mel = [i for i, _ in sorted(zip(mel, text_length), key=lambda x: x[1], reverse=True)]
@@ -98,6 +110,9 @@ def collate_fn_transformer(batch):
         # pos_text = _prepare_data(pos_text).astype(np.int32)
 
         # return t.LongTensor(text), t.FloatTensor(mel), t.FloatTensor(mel_input), t.LongTensor(pos_text), t.LongTensor(pos_mel), t.LongTensor(text_length)
+        if 'fname' in batch[0]:
+            return (t.as_tensor(text, dtype=t.long), t.as_tensor(mel, dtype=t.float), \
+                t.as_tensor(text_length, dtype=t.long), t.as_tensor(mel_length, dtype=t.long)), fnames
 
         return t.as_tensor(text, dtype=t.long), t.as_tensor(mel, dtype=t.float), \
             t.as_tensor(text_length, dtype=t.long), t.as_tensor(mel_length, dtype=t.long)
@@ -111,13 +126,19 @@ def collate_fn_postnet(batch):
     if isinstance(batch[0], collections.Mapping):
 
         mel = [d['mel'] for d in batch]
-        mag = [d['mag'] for d in batch]
+        mel_lens = [len(m) for m in mel]
 
         # PAD sequences with largest length of the batch
         mel = _pad_mel(mel)
-        mag = _pad_mel(mag)
 
-        return t.as_tensor(mel, dtype=t.float), t.as_tensor(mag, dtype=t.float)
+        if 'mag' in batch[0]:
+            mag = [d['mag'] for d in batch]
+            mag = _pad_mel(mag)
+            return t.as_tensor(mel, dtype=t.float), t.as_tensor(mag, dtype=t.float)
+        elif 'fname' in batch[0]:
+            fnames = [d['fname'] for d in batch]
+            return t.as_tensor(mel, dtype=t.float), mel_lens, fnames
+        return t.as_tensor(mel, dtype=t.float)
 
     raise TypeError(("batch must contain tensors, numbers, dicts or lists; found {}"
                      .format(type(batch[0]))))
@@ -143,11 +164,14 @@ def get_param_size(model):
         params += tmp
     return params
 
-def get_dataset(split_file):
-    return LJDatasets(os.path.join(data_path,split_file), os.path.join(data_path,'wavs'))
+def get_dataset(split_file, ret_file_names=False):
+    return LJDatasets(os.path.join(data_path,split_file), os.path.join(data_path,'wavs'), ret_file_names=ret_file_names)
 
 def get_post_dataset():
     return PostDatasets(os.path.join(data_path,'metadata.csv'), os.path.join(data_path,'wavs'))
+
+def get_test_mel_dataset(mels_dir, audio_list_file):
+    return PostDatasets(audio_list_file, mels_dir, is_inf=True)
 
 def _pad_mel(inputs):
     _pad = 0
