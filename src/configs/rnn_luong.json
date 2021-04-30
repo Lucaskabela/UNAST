@@ -51,6 +51,6 @@
     "save_every": 10,
     "use_gpu": true,
     "optim_type": "adamw",
-    "model_type": "rnn"
+    "model_type": "rnn",
     "is_eval_test": false
 }
