@@ -535,7 +535,7 @@ def evaluate(model, valid_dataloader, step, args, is_test=False):
             text_pred, text_pred_len = model.asr(None, None, mel, mel_len, infer=True)
             per += compute_per(text, text_pred, text_len, text_pred_len)
             n_iters += 1
-            
+
             if is_test:
                 text_pred = text_pred.detach().cpu()
                 text_pred_len = text_pred_len.detach().cpu()
@@ -723,8 +723,13 @@ def log_tb_example(model, ex, step, name="train"):
 
             WRITER.add_text(f"{name}/text_gold", sequence_to_text(ex["text"][:ex_text_len]), step)
             WRITER.add_text(f"{name}/text_pred", sequence_to_text(text_pred[:text_pred_len]), step)
-            WRITER.add_image(f"{name}/speech_gold", np.flip(ex["mel"][:ex_mel_len].transpose(), axis=0), step, dataformats="HW")
-            WRITER.add_image(f"{name}/speech_pred", np.flip(speech_pred[:speech_pred_len].transpose(), axis=0), step, dataformats="HW")
+
+            speech_gold = np.flip(ex["mel"][:ex_mel_len].transpose(), axis=0)
+            speech_pred = np.flip(speech_pred[:speech_pred_len].transpose(), axis=0)
+            for title, img in ((f"{name}/speech_gold", speech_gold), (f"{name}/speech_pred", speech_pred)):
+                fig, ax = plt.subplots()
+                ax.imshow(img, vmin=1e-8, vmax=1.0)
+                WRITER.add_figure(title, fig, step)
 
 
 def log_tb_discrim_out(d_out, d_target, step, name="train"):
