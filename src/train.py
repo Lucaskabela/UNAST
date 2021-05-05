@@ -102,6 +102,12 @@ def masked_mse(gold_mel, pred_mel, mel_mask):
     result = torch.sum(diff2) / torch.sum(mel_mask)
     return result
 
+# Masked MSE LOSS
+def masked_mse_l1_sum(gold_mel, pred_mel, mel_mask):
+    diff2 = torch.abs((gold_mel) - (pred_mel)) * (mel_mask)
+    result = torch.sum(diff2)
+    return result
+
 def text_loss(gold_char, text_pred, eos_weight=1.0):
     weight = torch.ones(text_pred.shape[1], device=DEVICE)
     weight[EOS_IDX] = eos_weight
@@ -997,6 +1003,7 @@ def evaluate_main(args):
             collate_fn=collate_fn_transformer, drop_last=True,
             num_workers=args.num_workers, pin_memory=True)
     s_epoch, _, model, _, _ = initialize_model(args)
+    print(f"Evaluting model at Epoch {s_epoch}")
     per, eval_losses, d_score = evaluate(model, test_dataloader, s_epoch, args, is_test=True)
     log_loss_metrics(eval_losses, s_epoch, eval=True)
     print("per : {}".format(per))
