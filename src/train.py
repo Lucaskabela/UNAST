@@ -554,7 +554,7 @@ def evaluate(model, valid_dataloader, step, args, is_test=False):
 
         # TODO: evaluate speech inference somehow?
         compare_outputs(text[-1][:], text_pred[-1][:], text_len[-1], text_pred_len[-1])
-        if args.use_discriminator:
+        if not is_test and args.use_discriminator:
             d_out, d_target = d_output
             log_tb_discrim_out(d_out, d_target, step, "eval")
 
@@ -1012,16 +1012,16 @@ if __name__ == "__main__":
     DEVICE = init_device(args)
     print(f"[{datetime.datetime.now()}] Device: {DEVICE}")
 
-    if args.tb_log_path:
-        WRITER = SummaryWriter(log_dir=args.tb_log_path, flush_secs=60)
-        WRITER.add_text("params", str(vars(args)), 0)
-
     if args.is_eval_test:
         print("#### DOING EVALUATION ####")
         evaluate_main(args)
     else:
+        if args.tb_log_path:
+            WRITER = SummaryWriter(log_dir=args.tb_log_path, flush_secs=60)
+            WRITER.add_text("params", str(vars(args)), 0)
+
         print("#### TRAINING ####")
         train(args)
 
-    if WRITER:
-        WRITER.close()
+        if WRITER:
+            WRITER.close()

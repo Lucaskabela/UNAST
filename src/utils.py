@@ -185,7 +185,7 @@ def load_ckp(checkpoint_fpath, model, optimizer):
         raise Exception("There is no model at the desired checkpoint")
 
     # load check point
-    checkpoint = torch.load(checkpoint_fpath)
+    checkpoint = torch.load(checkpoint_fpath, map_location='cuda:0')
 
     # initialize state_dicts from checkpoint to model
     model.load_state_dict(checkpoint['state_dict'])

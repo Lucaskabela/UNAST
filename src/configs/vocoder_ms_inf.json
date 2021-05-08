@@ -1,0 +1,15 @@
+{
+    "seed": 0,
+    "optim_type": "adamw",
+    "lr": 1e-3,
+    "weight_decay": 1e-6,
+    "num_mels": 80,
+    "hidden_size": 256,
+    "n_fft": 2048,
+    "sample_rate": 22050,
+    "num_workers": 4,
+    "load_path": "./checkpoint/vocoder_ms/model_499.ckpt",
+    "mel_dir": "./test/condor/rnn_d_b4_a4_lsa_f1/mels",
+    "out_dir": "./test/condor/rnn_d_b4_a4_lsa_f1/wavs",
+    "use_gpu": true
+}

@@ -46,14 +46,15 @@ def initialize(args):
 
     # Scheduler
     scheduler = None
-    last_step = ((len(dataset) - args.valid_size) // args.train_batch_size) * s_epoch
-    train_steps = ((len(dataset) - args.valid_size) // args.train_batch_size) * args.epochs
+    dataset_size = (len(dataset) - args.valid_size) // args.train_batch_size
+    last_step = dataset_size * s_epoch
+    train_steps = dataset_size * args.epochs
     if args.sched_type == "linear":
         scheduler = get_linear_schedule_with_warmup(optimizer, args.warmup_steps, train_steps, last_epoch=last_step-1)
     elif args.sched_type == "transformer":
         scheduler = get_transformer_paper_schedule(optimizer, args.warmup_steps, last_epoch=last_step-1)
     elif args.sched_type == "multistep":
-        milestones = [i * train_steps for i in args.lr_milestones]
+        milestones = [dataset_size * i for i in args.lr_milestones]
         scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones, gamma=args.lr_gamma, last_epoch=last_step-1)
 
     # Loss function

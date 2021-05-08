@@ -11,57 +11,67 @@ import torch
 import torch.nn as nn
 import argparse
 import datetime
+import glob
 import os
+
+import numpy as np
 from torch.utils.tensorboard import SummaryWriter
 from torch.utils.data import DataLoader, Subset
 from tqdm import tqdm
+from scipy.io.wavfile import write
 
 
 def initialize(args):
     set_seed(args.seed)
-
-    # Dataset
-    dataset = get_test_mel_dataset(os.path.join(args.out_test_dir, 'mels') , args.audio_list_file)
 
     # Model
     model = Vocoder(args.num_mels, args.hidden_size, args.n_fft)
     model = model.to(DEVICE)
 
     optimizer = None
-    if args.optim_type == 'adam':
+    if args.optim_type == "adam":
         optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    elif args.optim_type == 'adamw':
+    elif args.optim_type == "adamw":
         optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
 
-    # Continue training
     s_epoch = 0
     if args.load_path is not None:
         if os.path.isfile(args.load_path):
             s_epoch, _, model, optimizer = load_ckp(args.load_path, model, optimizer)
+            print(f"[INFO] Using model trained for {s_epoch} epochs.")
         else:
-            print(f"[WARN] Could not find checkpoint '{args.load_path}'.")
-            print(f"[WARN] Training from initial model...")
+            print(f"[INFO] Could not find checkpoint '{args.load_path}'.")
+            print(f"[INFO] Using randomly initialized model.")
 
-    return s_epoch, model, dataset
+    return model
 
 
-def make_mags(args):
-    assert 300 % args.eval_batch_size == 0, "Eval batch size {} must divide the length of the test set (300) perfectly for the dataloader".format(args.eval_batch_size)
-    s_epoch, model, dataset = initialize(args)
-
-    # Make dataloader
-    dataloader = DataLoader(dataset, batch_size=args.eval_batch_size, shuffle=False, collate_fn=collate_fn_postnet, drop_last=True, num_workers=args.num_workers)
-
-    pbar = tqdm(dataloader)
+def make_wavs(args):
+    model = initialize(args)
+    model = model.eval()
+    if not os.path.isdir(args.out_dir):
+        os.makedirs(args.out_dir, mode=0o755, exist_ok=True)
+    pbar = tqdm(glob.glob(os.path.join(args.mel_dir, "*.pt.npy")))
     with torch.no_grad():
-        for i, data in enumerate(pbar):
-            mel, mel_lens, fnames = data
-            mel = mel.to(DEVICE)
+        for path in pbar:
+            name = path.split("/")[-1][:-len(".pt.npy")]
+            if not os.path.isfile(os.path.join(args.out_dir, f"{name}.wav")):
+                mel = torch.from_numpy(np.load(path))
+                if mel.shape[0] == 1:
+                    print(f"{name} mel-spectrogram is too short for synthesis, shape: {mel.shape}")
+                else:
+                    mel = mel.unsqueeze(0).to(DEVICE)
+                    mag_preds = model.forward(mel).squeeze(0).detach().cpu().numpy()
+                    print("=========================================================================================")
+                    print(mel)
+                    print("---------------------------------")
+                    print(mag_preds)
+                    print("---------------------------------")
+                    wav = spectrogram2wav(mag_preds)
+                    print(wav)
+                    print("=========================================================================================")
+                    write(os.path.join(args.out_dir, f"{name}.wav"), args.sample_rate, wav)
 
-            mag_preds = model.forward(mel)
-
-            for mag, mel_len, fname in zip(mag_preds, mel_lens, fnames):
-                np.save(os.path.join(fname + '.mag'), mag.cpu().numpy()[:mel_len])
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -72,5 +82,5 @@ if __name__ == '__main__':
     DEVICE = init_device(args)
     print(f"[{datetime.datetime.now()}] Device: {DEVICE}")
 
-    make_mags(args)
+    make_wavs(args)
 
